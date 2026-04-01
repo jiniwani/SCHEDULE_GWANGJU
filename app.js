@@ -1276,8 +1276,44 @@
     return `주 ${value.toFixed(1)}일`;
   }
 
+  function getMonthOffset(baseYear, baseMonth, offset){
+    const date = new Date(baseYear, baseMonth - 1 + offset, 1);
+    return { year: date.getFullYear(), month: date.getMonth() + 1 };
+  }
+
+  function getWeekendHolidayWorkStats(empId, year, month){
+    const days = getDays(year, month);
+    let total = 0;
+    let weekend = 0;
+    let holiday = 0;
+
+    for(let d = 1; d <= days; d++){
+      const dateKey = dKey(year, month, d);
+      const entry = getEntry(empId, dateKey);
+      const isWorkDay = entry.shift === '조출' || entry.shift === '주간' || entry.shift === '야간';
+      if(!isWorkDay) continue;
+
+      const dow = parseDateKey(dateKey).getDay();
+      const isWeekend = dow === 0 || dow === 6;
+      const isHoliday = !!state.holidays?.[dateKey] || !!state.subHolidays?.[dateKey];
+      if(!isWeekend && !isHoliday) continue;
+
+      total++;
+      if(isWeekend) weekend++;
+      if(isHoliday) holiday++;
+    }
+
+    return { total, weekend, holiday };
+  }
+
+  function formatWeekendHolidaySummary(stats){
+    return `${stats.total}회 (주말 ${stats.weekend}, 공휴일 ${stats.holiday})`;
+  }
+
   function calculateStats(){
     ensureScheduleForMonth(state.year, state.month);
+    const prevMonth = getMonthOffset(state.year, state.month, -1);
+    const prevPrevMonth = getMonthOffset(state.year, state.month, -2);
     const weekBuckets = getWeekBuckets(state.year, state.month);
 
     return state.employees.map(emp=>{
@@ -1306,6 +1342,9 @@
 
       const totalWork = dayShift + nightShift;
       const avgWeekly = weekBuckets.length ? totalWork / weekBuckets.length : 0;
+      const currentWeekendHoliday = getWeekendHolidayWorkStats(emp.id, state.year, state.month);
+      const prevWeekendHoliday = getWeekendHolidayWorkStats(emp.id, prevMonth.year, prevMonth.month);
+      const prevPrevWeekendHoliday = getWeekendHolidayWorkStats(emp.id, prevPrevMonth.year, prevPrevMonth.month);
 
       return {
         name: emp.name,
@@ -1315,7 +1354,10 @@
         offShift,
         totalWork,
         weeklyCounts,
-        avgWeekly
+        avgWeekly,
+        currentWeekendHoliday,
+        prevWeekendHoliday,
+        prevPrevWeekendHoliday
       };
     });
   }
@@ -1327,7 +1369,7 @@
       <div class="muted" style="margin-bottom:12px">
         기준: 주간 + 야간 = 근무일, 휴무 = 비근무일
       </div>
-      <table class="basic">
+        <table class="basic stats-table">
         <thead>
           <tr>
             <th>이름</th>
@@ -1335,14 +1377,17 @@
             <th>주간 근무일</th>
             <th>야간 근무일</th>
             <th>휴무일</th>
-            <th>총 근무일</th>
-            <th>주차별 근무일</th>
-            <th>평균 주당 근무일</th>
-            <th>판정</th>
-          </tr>
-        </thead>
-        <tbody>
-    `;
+              <th>총 근무일</th>
+              <th>주차별 근무일</th>
+              <th>평균 주당 근무일</th>
+              <th>${state.year}년 ${state.month}월 주말/공휴일 근무</th>
+              <th>${getMonthOffset(state.year, state.month, -1).year}년 ${getMonthOffset(state.year, state.month, -1).month}월 주말/공휴일 근무</th>
+              <th>${getMonthOffset(state.year, state.month, -2).year}년 ${getMonthOffset(state.year, state.month, -2).month}월 주말/공휴일 근무</th>
+              <th>판정</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
 
     rows.forEach(item=>{
       const weeklyText = item.weeklyCounts.map((v,i)=>`${i+1}주차 ${v}일`).join(' / ');
@@ -1359,14 +1404,17 @@
           <td>${item.role}</td>
           <td>${item.dayShift}</td>
           <td>${item.nightShift}</td>
-          <td>${item.offShift}</td>
-          <td><strong>${item.totalWork}</strong></td>
-          <td>${weeklyText}</td>
-          <td>${item.avgWeekly.toFixed(1)}일</td>
-          <td>${judge}</td>
-        </tr>
-      `;
-    });
+            <td>${item.offShift}</td>
+            <td><strong>${item.totalWork}</strong></td>
+            <td>${weeklyText}</td>
+            <td>${item.avgWeekly.toFixed(1)}일</td>
+            <td>${formatWeekendHolidaySummary(item.currentWeekendHoliday)}</td>
+            <td>${formatWeekendHolidaySummary(item.prevWeekendHoliday)}</td>
+            <td>${formatWeekendHolidaySummary(item.prevPrevWeekendHoliday)}</td>
+            <td>${judge}</td>
+          </tr>
+        `;
+      });
 
     html += '</tbody></table>';
     document.getElementById('statsWrap').innerHTML = html;
