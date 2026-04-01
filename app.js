@@ -1055,27 +1055,84 @@
     return mobileUa || (touchDevice && narrowViewport);
   }
 
-  function triggerPrint(){
+  let _html2canvasLoader = null;
+  function loadHtml2Canvas(){
+    if(window.html2canvas) return Promise.resolve(window.html2canvas);
+    if(_html2canvasLoader) return _html2canvasLoader;
+    _html2canvasLoader = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+      script.onload = () => resolve(window.html2canvas);
+      script.onerror = () => reject(new Error('PNG 저장 도구를 불러오지 못했어.'));
+      document.head.appendChild(script);
+    });
+    return _html2canvasLoader;
+  }
+
+  async function exportCalendarAsPng(){
     const view = document.getElementById('view-calendar');
-    const stylesheet = document.querySelector('link[rel="stylesheet"]');
-    if(!view || !stylesheet){
-      alert('인쇄할 화면을 아직 준비하지 못했어. 잠시 후 다시 시도해줘.');
+    if(!view){
+      alert('이미지로 저장할 근무표를 찾지 못했어.');
       return;
     }
 
-    if(shouldUseNativeMobilePrint() && typeof window.print === 'function'){
-      const prevTab = state.activeTab;
-      state.activeTab = 'calendar';
+    const prevTab = state.activeTab;
+    state.activeTab = 'calendar';
+    renderAll();
+
+    try{
+      const html2canvas = await loadHtml2Canvas();
+      const target = document.getElementById('view-calendar');
+      if(!target) throw new Error('근무표 화면이 준비되지 않았어.');
+      const selectedEmp = state.employees.find(e=>Number(e.id) === Number(state.selectedEmployeeId));
+      const fileName = selectedEmp
+        ? `근무표_${state.year}-${String(state.month).padStart(2,'0')}_${selectedEmp.name}.png`
+        : `근무표_${state.year}-${String(state.month).padStart(2,'0')}.png`;
+      const canvas = await html2canvas(target, {
+        backgroundColor: '#f5f7fb',
+        scale: Math.max(2, window.devicePixelRatio || 1),
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+        windowWidth: Math.max(document.documentElement.scrollWidth, window.innerWidth),
+        windowHeight: Math.max(document.documentElement.scrollHeight, window.innerHeight)
+      });
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      if(/iPhone|iPad|iPod/i.test(navigator.userAgent || '')){
+        const preview = window.open('');
+        if(preview){
+          preview.document.write(`<title>${escapeHtml(fileName)}</title><img src="${dataUrl}" style="width:100%;height:auto;display:block" alt="근무표 PNG" />`);
+          preview.document.close();
+        }
+      }
+    }catch(e){
+      alert(e.message || 'PNG 저장에 실패했어. 잠시 후 다시 시도해줘.');
+    }finally{
+      state.activeTab = prevTab;
       renderAll();
-      setTimeout(() => {
-        window.print();
-        state.activeTab = prevTab;
-        renderAll();
-      }, 180);
-      return;
     }
+  }
 
-    const popup = window.open('', '_blank', 'width=1280,height=900');
+  function triggerPrint(){
+      const view = document.getElementById('view-calendar');
+      const stylesheet = document.querySelector('link[rel="stylesheet"]');
+      if(!view || !stylesheet){
+      alert('인쇄할 화면을 아직 준비하지 못했어. 잠시 후 다시 시도해줘.');
+        return;
+      }
+      const isMobilePrint = shouldUseNativeMobilePrint();
+      if(isMobilePrint){
+        exportCalendarAsPng();
+        return;
+      }
+      const popup = window.open('', '_blank', isMobilePrint ? '' : 'width=1280,height=900');
     const title = document.getElementById('printTitle')?.textContent || `${state.year}년 ${state.month}월 근무표`;
     const rootStyle = document.documentElement.style.cssText || '';
     const printMarkup = `
@@ -1088,24 +1145,29 @@
         <link rel="stylesheet" href="${stylesheet.href}" />
         <style>:root{${rootStyle}}</style>
       </head>
-      <body>
-        <div class="app">
-          ${view.outerHTML}
-        </div>
-        <script>
-          window.addEventListener('load', function(){
-            setTimeout(function(){
-              window.focus();
-              window.print();
-            }, 250);
-          });
-          window.addEventListener('afterprint', function(){
-            window.close();
-          });
-        <\/script>
-      </body>
-      </html>
-    `;
+        <body>
+          <div class="app">
+            ${view.outerHTML}
+          </div>
+          <script>
+            var isMobilePrint = ${isMobilePrint ? 'true' : 'false'};
+            window.addEventListener('load', function(){
+              setTimeout(function(){
+                window.focus();
+                if(typeof window.print === 'function'){
+                  window.print();
+                }
+              }, isMobilePrint ? 450 : 250);
+            });
+            if(!isMobilePrint){
+              window.addEventListener('afterprint', function(){
+                window.close();
+              });
+            }
+          <\/script>
+        </body>
+        </html>
+      `;
 
     if(popup){
       popup.document.open();

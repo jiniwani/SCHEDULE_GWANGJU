@@ -969,6 +969,8 @@ table.basic{
 #employeeTable th:nth-child(2),
 #employeeTable td:nth-child(2){
   width:220px;
+  white-space:nowrap;
+  word-break:keep-all;
 }
 
 #employeeTable th:nth-child(3),
@@ -1002,13 +1004,29 @@ table.basic td{
     gap:6px;
     flex-wrap:nowrap;
   }
-  .table-actions-inline .btn{
-    min-width:56px;
-    padding:6px 10px;
+.table-actions-inline .btn{
+  min-width:56px;
+  padding:6px 10px;
+}
+
+@media (max-width: 768px){
+  #view-employees{
+    overflow-x:auto;
   }
 
-  .tag-box{
-    display:flex;
+  #employeeTable.basic{
+    width:max-content;
+    min-width:520px;
+  }
+
+  #employeeTable th,
+  #employeeTable td{
+    white-space:nowrap;
+  }
+}
+
+.tag-box{
+  display:flex;
     gap:8px;
     flex-wrap:wrap;
   }
