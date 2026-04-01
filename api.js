@@ -90,6 +90,14 @@ function cloneSnapshotState(state) {
   return cloned;
 }
 
+function createKstTimestamp() {
+  return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 16);
+}
+
+function normalizeDisplayTimestamp(value) {
+  return String(value || '').replace(/\s*\(KST\)\s*$/, '').trim();
+}
+
 function createSnapshotEntry(state, { note = '', notice = '', timestamp = '', revision = 0 } = {}) {
   return {
     id: Date.now() + Math.floor(Math.random() * 1000),
@@ -251,8 +259,7 @@ async function handlePostState(request, env) {
   delete statePayload._revision;
   delete statePayload._lastSavedAt;
 
-  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
-  const timestamp = kst.toISOString().replace('T', ' ').slice(0, 16) + ' (KST)';
+  const timestamp = createKstTimestamp();
   const nextRevision = currentRevision + 1;
 
   const nextNotices = Array.isArray(currentState.notices) ? [...currentState.notices] : [];
@@ -339,8 +346,7 @@ async function handleDeleteNotice(request, env) {
     ? currentState.notices.filter(item => Number(item.id) !== noticeId)
     : [];
 
-  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
-  const timestamp = kst.toISOString().replace('T', ' ').slice(0, 16) + ' (KST)';
+  const timestamp = createKstTimestamp();
   const nextRevision = currentRevision + 1;
 
   const nextState = normalizeStatePayload({
@@ -496,8 +502,7 @@ async function handleRestoreSnapshot(request, env) {
     return cors(json({ error: '복원할 저장본을 찾지 못했어.' }, 404));
   }
 
-  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
-  const timestamp = kst.toISOString().replace('T', ' ').slice(0, 16) + ' (KST)';
+  const timestamp = createKstTimestamp();
   const nextRevision = currentRevision + 1;
 
   const backupSnapshot = createSnapshotEntry(currentState, {
@@ -523,13 +528,13 @@ async function handleRestoreSnapshot(request, env) {
 
   const rawLog = await env.SCHEDULER_KV.get(CHANGELOG_KEY, KV_READ_OPTIONS);
   const logs = rawLog ? JSON.parse(rawLog) : [];
-  logs.unshift({
-    id: Date.now(),
-    timestamp,
-    note: `${snapshot.timestamp || ''} 저장본으로 복원`,
-    year: restoredState.year,
-    month: restoredState.month,
-  });
+    logs.unshift({
+      id: Date.now(),
+      timestamp,
+      note: `${normalizeDisplayTimestamp(snapshot.timestamp || '')} 저장본으로 복원`,
+      year: restoredState.year,
+      month: restoredState.month,
+    });
   if (logs.length > CHANGELOG_LIMIT) logs.splice(CHANGELOG_LIMIT);
   await env.SCHEDULER_KV.put(CHANGELOG_KEY, JSON.stringify(logs));
 
@@ -604,7 +609,7 @@ async function handleRequestWishOff(request, env) {
   currentEntry.tags = tags;
   state.schedule[employeeId][dateKey] = currentEntry;
   state._revision = Number(state._revision || 0) + 1;
-  state._lastSavedAt = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' (KST)';
+  state._lastSavedAt = createKstTimestamp();
 
   await env.SCHEDULER_KV.put(STATE_KEY, JSON.stringify(state));
   return cors(json({ ok: true, state }));

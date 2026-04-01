@@ -400,7 +400,7 @@
           <div class="notice-item-title">${escHtml(notice.message || '공지')}</div>
           ${isAdmin() ? `<button class="btn small" type="button" onclick="deleteNotice(${Number(notice.id)})">삭제</button>` : ''}
         </div>
-        <div class="notice-item-meta">${escHtml(notice.timestamp || '')} · ${notice.year}년 ${notice.month}월</div>
+        <div class="notice-item-meta">${escHtml(normalizeDisplayTimestamp(notice.timestamp || ''))} · ${notice.year}년 ${notice.month}월</div>
       </div>
     `).join('');
   }
@@ -414,7 +414,12 @@
       return;
     }
 
-    el.textContent = `마지막 저장 ${state._lastSavedAt} · rev ${Number(state._revision || 0)}`;
+    const displayTimestamp = normalizeDisplayTimestamp(state._lastSavedAt);
+    el.textContent = `마지막 저장 ${displayTimestamp}`;
+  }
+
+  function normalizeDisplayTimestamp(value){
+    return String(value || '').replace(/\s*\(KST\)\s*$/,'').trim();
   }
 
   function collectSaveWarnings(){
@@ -480,7 +485,7 @@
     const employeeCount = Array.isArray(snapshotState.employees) ? snapshotState.employees.length : 0;
     return `
       <div style="display:flex;flex-direction:column;gap:8px;">
-        <div><strong>저장 시각:</strong> ${escHtml(snapshot.timestamp || '-')}</div>
+          <div><strong>저장 시각:</strong> ${escHtml(normalizeDisplayTimestamp(snapshot.timestamp || '-'))}</div>
         <div><strong>변경이력:</strong> ${escHtml(snapshot.note || '근무표 수정')}</div>
         <div><strong>공지:</strong> ${noticeText}</div>
         <div><strong>기준 월:</strong> ${snapshotState.year || '-'}년 ${snapshotState.month || '-'}월</div>
@@ -496,12 +501,12 @@
 
     if(targetLogs.length){
       const latest = targetLogs[0];
-      const baseDate = String(latest.timestamp || '').split(' ')[0] || '-';
+        const baseDate = normalizeDisplayTimestamp(latest.timestamp || '').split(' ')[0] || '-';
       lines.push(`기준시각: ${baseDate}`);
       lines.push('');
       lines.push('변경내용');
       targetLogs.forEach((log, idx) => {
-        lines.push(`${idx + 1}. ${log.note || '근무표 수정'} (${log.timestamp || '-'})`);
+          lines.push(`${idx + 1}. ${log.note || '근무표 수정'} (${normalizeDisplayTimestamp(log.timestamp || '-')})`);
       });
     } else {
       lines.push('기준시각: -');
@@ -2036,7 +2041,7 @@
           ${snapshots.map(snapshot => `
             <button class="snapshot-card ${Number(snapshot.id) === Number(activeSnapshot.id) ? 'active' : ''}" type="button" onclick="openRestoreManager(${Number(snapshot.id)})">
               <div class="snapshot-card-title">${escHtml(snapshot.note || '근무표 수정')}</div>
-              <div class="snapshot-card-meta">${escHtml(snapshot.timestamp || '-')}</div>
+                <div class="snapshot-card-meta">${escHtml(normalizeDisplayTimestamp(snapshot.timestamp || '-'))}</div>
               <div class="snapshot-card-meta">${(snapshot.state?.year || '-') }년 ${(snapshot.state?.month || '-') }월 · rev ${Number(snapshot.revision || 0)}</div>
             </button>
           `).join('')}
@@ -2656,7 +2661,7 @@
               <div style="font-size:13px;font-weight:800;">${escHtml(log.note)}</div>
               ${isAdmin() ? `<button class="btn small" type="button" onclick="deleteChangelog(${Number(log.id)})">삭제</button>` : ''}
             </div>
-            <div style="font-size:12px;color:var(--muted);">${escHtml(log.timestamp)} · ${log.year}년 ${log.month}월</div>
+            <div style="font-size:12px;color:var(--muted);">${escHtml(normalizeDisplayTimestamp(log.timestamp))} · ${log.year}년 ${log.month}월</div>
           </div>
         </div>
       `).join('');
