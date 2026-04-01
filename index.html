@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lab-scheduler-worker",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-04-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "SCHEDULER_KV",
+      "id": "여기에_KV_NAMESPACE_ID를_입력하세요"
+    }
+  ]
+}

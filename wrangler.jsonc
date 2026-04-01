@@ -1,0 +1,11 @@
+업로드 방법
+
+1. GitHub 저장소 루트에 이 폴더 내용을 그대로 올립니다.
+2. Cloudflare Dashboard 또는 Wrangler에서 Workers 프로젝트로 연결합니다.
+3. wrangler.jsonc의 kv_namespaces.id를 실제 KV Namespace ID로 바꿉니다.
+4. 필요하면 초기 비밀번호 1234로 로그인한 뒤 앱 안에서 비밀번호를 변경합니다.
+
+폴더 구조
+- public/index.html
+- src/worker.js
+- wrangler.jsonc
