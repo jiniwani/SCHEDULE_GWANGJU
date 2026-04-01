@@ -1,0 +1,2303 @@
+﻿  const STORAGE_KEY = 'labSchedulerSimpleDefaultV1';
+
+  const TAGS = [
+    '연차',
+    '반차',
+    '교육&학회',
+    '희망휴무',
+    '검체관리',
+    '여름휴가',
+    '주간지원',
+    '야간지원'
+  ];
+
+  const ADMIN_SESSION_KEY = 'labSchedulerAdminSessionV1';
+  const ADMIN_TOKEN_KEY = 'labSchedulerAdminTokenV1';
+
+  let dragData = null;
+  let editingMemoId = null;
+  let knownLatestChangeId = null;
+  let restorePreviewSnapshotId = null;
+
+  let state = {
+    year: 2026,
+    month: 3,
+    slotConfig: { 조출: 0, 주간: 3, 야간: 6 },
+    visibleRows: { 조출: false, 야간: true },
+    copiedDateKey: null,
+    memoOpen: false,
+    memos: [],
+    employees: [
+      { id: 1, name: '박준환', role: '주간' },
+      { id: 2, name: '손가영', role: '주간' },
+      { id: 3, name: '정석희', role: '주간' },
+      { id: 4, name: '김지효', role: '야간' },
+      { id: 5, name: '한혜림', role: '야간' },
+      { id: 6, name: '박석호', role: '야간' },
+      { id: 7, name: '강승혜', role: '야간' },
+      { id: 8, name: '조영오', role: '야간' },
+      { id: 9, name: '양다연', role: '야간' }
+    ],
+    schedule: {},
+    holidays: {
+      '2026-03-01': { name: '삼일절' }
+    },
+    subHolidays: {
+      '2026-03-02': { name: '대체공휴일' }
+    },
+    notices: [],
+    snapshots: [],
+    _revision: 0,
+    _lastSavedAt: '',
+    activeTab: 'calendar',
+    selectedEmployeeId: null,
+    viewerWishOffMode: false,
+    isAdmin: false,
+    highlightColors: {
+      work: '#dbeafe',
+      off: '#fee2e2'
+    }
+  };
+
+  const COLOR_PRESETS = {
+    classic: { work: '#dbeafe', off: '#fee2e2' },
+    mint: { work: '#d1fae5', off: '#ecfeff' },
+    warm: { work: '#fef3c7', off: '#ffe4e6' },
+    violet: { work: '#ede9fe', off: '#f5f3ff' }
+  };
+
+  function clamp(v, min, max){
+    return Math.max(min, Math.min(max, v));
+  }
+
+  function hexToRgb(hex){
+    const cleaned = String(hex || '').replace('#','').trim();
+    const full = cleaned.length === 3 ? cleaned.split('').map(c => c + c).join('') : cleaned;
+    const num = parseInt(full, 16);
+    if(Number.isNaN(num) || full.length !== 6) return { r: 219, g: 234, b: 254 };
+    return { r:(num>>16)&255, g:(num>>8)&255, b:num&255 };
+  }
+
+  function rgbToHex(r,g,b){
+    return '#' + [r,g,b].map(v => clamp(Math.round(v),0,255).toString(16).padStart(2,'0')).join('');
+  }
+
+  function mixWithWhite(hex, ratio){
+    const {r,g,b}=hexToRgb(hex);
+    return rgbToHex(r + (255-r)*ratio, g + (255-g)*ratio, b + (255-b)*ratio);
+  }
+
+  function darken(hex, ratio){
+    const {r,g,b}=hexToRgb(hex);
+    return rgbToHex(r*(1-ratio), g*(1-ratio), b*(1-ratio));
+  }
+
+  function ensureHighlightColors(){
+    if(!state.highlightColors) state.highlightColors = { work:'#60a5fa', off:'#94a3b8' };
+    if(!state.highlightColors.work) state.highlightColors.work = '#60a5fa';
+    if(!state.highlightColors.off) state.highlightColors.off = '#94a3b8';
+  }
+
+  function ensureEarlyShiftSetting(){
+    if(!state.slotConfig) state.slotConfig = {};
+    if(typeof state.slotConfig.조출 !== 'number') state.slotConfig.조출 = 0;
+  }
+
+  function ensureVisibleRows(){
+    if(!state.visibleRows) state.visibleRows = { 조출: false, 야간: true };
+    if(typeof state.visibleRows.조출 !== 'boolean') state.visibleRows.조출 = (state.slotConfig?.조출 || 0) > 0;
+    if(typeof state.visibleRows.야간 !== 'boolean') state.visibleRows.야간 = true;
+  }
+
+  function applyHighlightColors(){
+    ensureHighlightColors();
+    const root = document.documentElement;
+    const work = state.highlightColors.work;
+    const off = state.highlightColors.off;
+
+    root.style.setProperty('--work-bg-start', mixWithWhite(work, 0.65));
+    root.style.setProperty('--work-bg-end', mixWithWhite(work, 0.84));
+    root.style.setProperty('--work-border', work);
+    root.style.setProperty('--work-outline', mixWithWhite(work, 0.45));
+    root.style.setProperty('--work-text', darken(work, 0.22));
+    root.style.setProperty('--off-bg-start', mixWithWhite(off, 0.68));
+    root.style.setProperty('--off-bg-end', mixWithWhite(off, 0.84));
+    root.style.setProperty('--off-border', off);
+    root.style.setProperty('--off-outline', mixWithWhite(off, 0.46));
+    root.style.setProperty('--off-text', darken(off, 0.22));
+
+    root.style.setProperty('--work-bg-start-fade', mixWithWhite(work, 0.88));
+    root.style.setProperty('--work-bg-end-fade', mixWithWhite(work, 0.94));
+    root.style.setProperty('--work-border-fade', mixWithWhite(work, 0.72));
+    root.style.setProperty('--work-outline-fade', mixWithWhite(work, 0.82));
+    root.style.setProperty('--work-text-fade', mixWithWhite(darken(work,0.12), 0.35));
+    root.style.setProperty('--off-bg-start-fade', mixWithWhite(off, 0.9));
+    root.style.setProperty('--off-bg-end-fade', mixWithWhite(off, 0.95));
+    root.style.setProperty('--off-border-fade', mixWithWhite(off, 0.74));
+    root.style.setProperty('--off-outline-fade', mixWithWhite(off, 0.84));
+    root.style.setProperty('--off-text-fade', mixWithWhite(darken(off,0.1), 0.38));
+
+    const workPicker = document.getElementById('workColorPicker');
+    const offPicker = document.getElementById('offColorPicker');
+    if(workPicker) workPicker.value = work;
+    if(offPicker) offPicker.value = off;
+  }
+
+  function setHighlightColor(type, value){
+    ensureHighlightColors();
+    if(type === 'work' || type === 'off'){
+      state.highlightColors[type] = value;
+      saveState();
+      applyHighlightColors();
+      renderAll();
+    }
+  }
+
+  function applyColorPreset(name){
+    const preset = COLOR_PRESETS[name];
+    if(!preset) return;
+    state.highlightColors = { ...preset };
+    saveState();
+    applyHighlightColors();
+    renderAll();
+  }
+
+  function isAdmin(){
+    return !!state.isAdmin;
+  }
+
+  function requireAdmin(){
+    if(isAdmin()) return true;
+    alert('관리자 로그인 후 사용할 수 있어.');
+    return false;
+  }
+
+  function getAdminToken(){
+    return sessionStorage.getItem(ADMIN_TOKEN_KEY) || '';
+  }
+
+  function clearAdminSession(){
+    state.isAdmin = false;
+    sessionStorage.removeItem(ADMIN_SESSION_KEY);
+    sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+  }
+
+  function saveAdminSession(){
+    if(state.isAdmin && getAdminToken()){
+      sessionStorage.setItem(ADMIN_SESSION_KEY, '1');
+    }else{
+      clearAdminSession();
+    }
+  }
+
+  async function restoreAdminSession(){
+    const token = getAdminToken();
+    if(!token){
+      clearAdminSession();
+      return;
+    }
+
+    try{
+      const res = await fetch('/api/auth/session', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if(res.ok){
+        state.isAdmin = true;
+        sessionStorage.setItem(ADMIN_SESSION_KEY, '1');
+        return;
+      }
+    }catch(e){}
+
+    clearAdminSession();
+  }
+
+  let syncTimer = null;
+  function showSyncStatus(status){
+    const badge = document.getElementById('syncBadge');
+    if(!badge) return;
+    clearTimeout(syncTimer);
+    const map = {
+      saving:  { text:'저장 중…',  cls:'saving'  },
+      saved:   { text:'저장 완료', cls:'saved'   },
+      error:   { text:'저장 실패', cls:'error'   },
+      loading: { text:'불러오는 중…', cls:'loading' },
+      loaded:  { text:'',          cls:''        },
+    };
+    const m = map[status] || {};
+    if(!m.text){ badge.style.display='none'; return; }
+    badge.textContent = m.text;
+    badge.className = 'sync-badge ' + m.cls;
+    badge.style.display = 'inline-flex';
+    if(status === 'saved'){
+      syncTimer = setTimeout(()=>{ badge.style.display='none'; }, 2000);
+    }
+  }
+
+  // 로컬 상태만 유지 (KV 전송 없음 — 명시적 저장 버튼으로만 KV에 씀)
+  function saveState(){
+    saveAdminSession();
+    // 미저장 변경 있음 표시
+    if(isAdmin()) markUnsaved();
+  }
+
+  // ── 명시적 저장 (저장 버튼 클릭 시) ──────────────────────────
+  async function explicitSave(changeNote, noticeContent = ''){
+    if(!isAdmin()) return;
+    showSyncStatus('saving');
+    try{
+      const { isAdmin: _a, ...payload } = state;
+      const res = await fetch('/api/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...payload,
+          _adminToken: getAdminToken(),
+          _changeNote: changeNote,
+          _noticeContent: noticeContent,
+          _baseRevision: Number(state._revision || 0)
+        })
+      });
+      if(res.status === 403){
+        clearAdminSession();
+        renderAll();
+        throw new Error('admin session expired');
+      }
+      if(res.status === 409){
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'save conflict');
+      }
+      if(!res.ok) throw new Error('save failed');
+      const data = await res.json();
+      state._lastTimestamp = data.timestamp || '';
+      state._lastSavedAt = data.timestamp || '';
+      state._revision = Number(data.revision || state._revision || 0);
+      if(Array.isArray(data.notices)) state.notices = data.notices;
+      if(Array.isArray(data.snapshots)) state.snapshots = data.snapshots;
+      markSaved();
+      if(state.activeTab === 'changelog') await loadChangelog(true);
+      renderAll();
+      showSyncStatus('saved');
+    }catch(e){
+      showSyncStatus('error');
+      if(e.message === 'admin session expired'){
+        alert('관리자 세션이 만료됐어. 다시 로그인해줘.');
+      } else if(e.message){
+        alert(e.message);
+      }
+    }
+  }
+
+  // ── 미저장 상태 표시 ──────────────────────────────────────────
+  let _hasUnsaved = false;
+  function markUnsaved(){
+    if(_hasUnsaved) return;
+    _hasUnsaved = true;
+    const btn = document.getElementById('explicitSaveBtn');
+    if(btn){ btn.classList.add('unsaved'); btn.textContent = '● 저장'; }
+  }
+  function markSaved(){
+    _hasUnsaved = false;
+    const btn = document.getElementById('explicitSaveBtn');
+    if(btn){ btn.classList.remove('unsaved'); btn.textContent = '저장'; }
+  }
+
+  function renderNoticePanel(){
+    const panel = document.getElementById('noticePanel');
+    const list = document.getElementById('noticeList');
+    const meta = document.getElementById('noticePanelMeta');
+    if(!panel || !list || !meta) return;
+
+    const notices = Array.isArray(state.notices) ? state.notices : [];
+    if(!notices.length){
+      panel.classList.add('hidden');
+      list.innerHTML = '';
+      meta.textContent = '';
+      return;
+    }
+
+    panel.classList.remove('hidden');
+    meta.textContent = `누적 공지 ${notices.length}건`;
+    list.innerHTML = `
+      <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">
+        <button class="btn small" type="button" onclick="openReportModal()">보고문 만들기</button>
+      </div>
+    ` + notices.map(notice => `
+      <div class="notice-item">
+        <div class="notice-item-title">${escHtml(notice.message || '공지')}</div>
+        <div class="notice-item-meta">${escHtml(notice.timestamp || '')} · ${notice.year}년 ${notice.month}월</div>
+      </div>
+    `).join('');
+  }
+
+  function renderLastSavedInfo(){
+    const el = document.getElementById('lastSavedInfo');
+    if(!el) return;
+
+    if(!state._lastSavedAt){
+      el.textContent = '마지막 저장 없음';
+      return;
+    }
+
+    el.textContent = `마지막 저장 ${state._lastSavedAt} · rev ${Number(state._revision || 0)}`;
+  }
+
+  function collectSaveWarnings(){
+    const warnings = [];
+    const weeks = getRenderWeeks(state.year, state.month);
+    const visibleDates = [];
+    weeks.forEach(week => {
+      week.forEach(date => {
+        const y = date.getFullYear();
+        const m = date.getMonth() + 1;
+        if(y === state.year && m === state.month){
+          visibleDates.push(dKey(y, m, date.getDate()));
+        }
+      });
+    });
+
+    visibleDates.forEach(dateKey => {
+      const result = validateDay(dateKey);
+      if(result.dayCount !== state.slotConfig.주간){
+        warnings.push(`${dateKey} 주간 ${result.dayCount}/${state.slotConfig.주간}`);
+      }
+      if(state.visibleRows?.야간 !== false && result.nightCount !== state.slotConfig.야간){
+        warnings.push(`${dateKey} 야간 ${result.nightCount}/${state.slotConfig.야간}`);
+      }
+    });
+
+    return warnings;
+  }
+
+  function buildSaveWarningsMarkup(warnings){
+    if(!warnings.length){
+      return `
+        <div class="save-warning-box">
+          <div class="save-warning-title">저장 전 점검</div>
+          <div class="save-warning-empty">현재 확인된 인원 경고는 없어.</div>
+        </div>
+      `;
+    }
+
+    const visibleWarnings = warnings.slice(0, 8);
+    const extraCount = warnings.length - visibleWarnings.length;
+
+    return `
+      <div class="save-warning-box">
+        <div class="save-warning-title">저장 전 경고 ${warnings.length}건</div>
+        <ol class="save-warning-list">
+          ${visibleWarnings.map(item => `<li>${escHtml(item)}</li>`).join('')}
+          ${extraCount > 0 ? `<li>외 ${extraCount}건 더 있어.</li>` : ''}
+        </ol>
+      </div>
+    `;
+  }
+
+  function buildSnapshotPreview(snapshot){
+    if(!snapshot){
+      return `
+        <div class="muted" style="font-size:13px;">미리볼 저장본이 없어.</div>
+      `;
+    }
+
+    const snapshotState = snapshot.state || {};
+    const noticeText = snapshot.notice ? escHtml(snapshot.notice) : '없음';
+    const employeeCount = Array.isArray(snapshotState.employees) ? snapshotState.employees.length : 0;
+    return `
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div><strong>저장 시각:</strong> ${escHtml(snapshot.timestamp || '-')}</div>
+        <div><strong>변경이력:</strong> ${escHtml(snapshot.note || '근무표 수정')}</div>
+        <div><strong>공지:</strong> ${noticeText}</div>
+        <div><strong>기준 월:</strong> ${snapshotState.year || '-'}년 ${snapshotState.month || '-'}월</div>
+        <div><strong>직원 수:</strong> ${employeeCount}명</div>
+        <div><strong>revision:</strong> ${Number(snapshot.revision || 0)}</div>
+      </div>
+    `;
+  }
+
+  function buildReportTemplate(logs = changelogCache){
+    const targetLogs = Array.isArray(logs) ? logs.slice(0, 5) : [];
+    const lines = ['[검사실 근무표 변경 보고]'];
+
+    if(targetLogs.length){
+      const latest = targetLogs[0];
+      lines.push(`기준시각: ${latest.timestamp || '-'}`);
+      lines.push('');
+      lines.push('변경이력:');
+      targetLogs.forEach((log, idx) => {
+        lines.push(`${idx + 1}. ${log.note || '근무표 수정'} (${log.timestamp || '-'})`);
+      });
+    } else {
+      lines.push('기준시각: -');
+      lines.push('');
+      lines.push('변경이력:');
+      lines.push('- 아직 불러온 변경이력이 없습니다.');
+    }
+
+    if(Array.isArray(state.notices) && state.notices.length){
+      lines.push('');
+      lines.push('공지:');
+      state.notices.slice(0, 3).forEach((notice, idx) => {
+        lines.push(`${idx + 1}. ${notice.message || '공지'} (${notice.timestamp || '-'})`);
+      });
+    }
+
+    return lines.join('\n');
+  }
+
+  async function copyTextToClipboard(text){
+    if(navigator.clipboard?.writeText){
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+  }
+
+  function openReportModal(){
+    const template = buildReportTemplate();
+    openModal(`
+      <div class="modal-head">
+        <div class="modal-title">보고문 만들기</div>
+        <button class="btn" onclick="closeModal()">닫기</button>
+      </div>
+      <div class="muted" style="margin-bottom:10px;font-size:13px;">
+        기본 템플릿을 자동으로 채워뒀어. 복사 전에 자유롭게 수정하면 돼.
+      </div>
+      <div class="field" style="min-width:100%;">
+        <label>보고 내용</label>
+        <textarea id="reportTemplateInput" class="memo-textarea" style="min-height:260px;">${escHtml(template)}</textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" type="button" onclick="resetReportTemplate()">템플릿 다시 채우기</button>
+        <button class="btn primary" type="button" onclick="copyReportTemplate()">복사</button>
+      </div>
+    `);
+  }
+
+  function resetReportTemplate(){
+    const textarea = document.getElementById('reportTemplateInput');
+    if(textarea) textarea.value = buildReportTemplate();
+  }
+
+  async function copyReportTemplate(){
+    const textarea = document.getElementById('reportTemplateInput');
+    const value = textarea?.value || '';
+    if(!value.trim()){
+      alert('복사할 내용이 없어.');
+      return;
+    }
+    try{
+      await copyTextToClipboard(value);
+      alert('보고문을 복사했어.');
+    }catch(e){
+      alert('복사에 실패했어. 다시 시도해줘.');
+    }
+  }
+
+  async function loadState(forceFresh = false){
+    showSyncStatus('loading');
+    try{
+      const url = forceFresh ? '/api/state?fresh=1' : '/api/state';
+      const res = await fetch(url);
+      if(res.ok){
+        const parsed = await res.json();
+        const { isAdmin: _ignoredIsAdmin, ...safeParsed } = parsed;
+        state = { ...state, ...safeParsed };
+        if(!Array.isArray(state.notices)) state.notices = [];
+        if(!Array.isArray(state.snapshots)) state.snapshots = [];
+        state._revision = Number(state._revision || 0);
+        showSyncStatus('loaded');
+      } else {
+        showSyncStatus('error');
+      }
+    }catch(e){
+      showSyncStatus('error');
+    }
+  }
+
+  function dKey(y,m,d){
+    return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+  }
+
+  function parseDateKey(key){
+    const [y,m,d] = key.split('-').map(Number);
+    return new Date(y, m-1, d);
+  }
+
+  function getDays(y,m){
+    return new Date(y, m, 0).getDate();
+  }
+
+  function getMonthKeyPrefix(y,m){
+    return `${y}-${String(m).padStart(2,'0')}-`;
+  }
+
+  function getMonthMatrix(y,m){
+    const first = new Date(y, m-1, 1);
+    const firstDay = first.getDay();
+    const start = new Date(y, m-1, 1 - firstDay);
+    const weeks = [];
+    for(let w=0; w<6; w++){
+      const week = [];
+      for(let d=0; d<7; d++){
+        const current = new Date(start);
+        current.setDate(start.getDate() + w * 7 + d);
+        week.push(current);
+      }
+      weeks.push(week);
+    }
+    return weeks;
+  }
+
+  function getRenderWeeks(y,m){
+    return getMonthMatrix(y,m);
+  }
+
+  function isRealMonthInWeek(week, y, m){
+    return week.some(date => date.getFullYear() === y && (date.getMonth()+1) === m);
+  }
+
+  function isHolidayDate(dateKey){
+    return !!state.holidays[dateKey];
+  }
+
+  function createDefaultEntry(emp, dateKey){
+    const dt = parseDateKey(dateKey);
+    const dow = dt.getDay();
+
+    if(dow === 0) return { shift:'휴무', tags:[] };
+    if(isHolidayDate(dateKey)) return { shift:'휴무', tags:[] };
+
+    return { shift: emp.role, tags:[] };
+  }
+
+  function ensureScheduleForMonth(y,m){
+    const days = getDays(y,m);
+    for(const emp of state.employees){
+      if(!state.schedule[emp.id]) state.schedule[emp.id] = {};
+      for(let d=1; d<=days; d++){
+        const key = dKey(y,m,d);
+        if(state.schedule[emp.id][key]) continue;
+        state.schedule[emp.id][key] = createDefaultEntry(emp, key);
+      }
+    }
+  }
+
+  function refreshDefaultEntriesForMonth(y,m){
+    const days = getDays(y,m);
+    for(const emp of state.employees){
+      if(!state.schedule[emp.id]) state.schedule[emp.id] = {};
+      for(let d=1; d<=days; d++){
+        const key = dKey(y,m,d);
+        const current = state.schedule[emp.id][key];
+        const fresh = createDefaultEntry(emp, key);
+
+        if(!current){
+          state.schedule[emp.id][key] = fresh;
+          continue;
+        }
+
+        const isUntouched =
+          Array.isArray(current.tags) &&
+          current.tags.length === 0 &&
+          (current.shift === '주간' || current.shift === '야간' || current.shift === '휴무');
+
+        if(isUntouched){
+          state.schedule[emp.id][key] = fresh;
+        }
+      }
+    }
+  }
+
+  function getEntry(empId, dateKey){
+    const dt = parseDateKey(dateKey);
+    ensureScheduleForMonth(dt.getFullYear(), dt.getMonth()+1);
+    if(!state.schedule[empId]) state.schedule[empId] = {};
+    if(!state.schedule[empId][dateKey]){
+      const emp = state.employees.find(e=>e.id===empId);
+      state.schedule[empId][dateKey] = createDefaultEntry(emp, dateKey);
+    }
+    return state.schedule[empId][dateKey];
+  }
+
+  function isWishOffTagged(entry){
+    return Array.isArray(entry?.tags) && entry.tags.includes('희망휴무');
+  }
+
+  function isViewerWishOffMode(){
+    return !isAdmin() && !!state.viewerWishOffMode && !!state.selectedEmployeeId;
+  }
+
+  function getEmployeesByShift(dateKey, shift){
+    const arr = [];
+    for(const emp of state.employees){
+      const entry = getEntry(emp.id, dateKey);
+      if(entry.shift === shift){
+        arr.push({ employee: emp, entry });
+      }
+    }
+    return arr;
+  }
+
+  function validateDay(dateKey){
+    ensureVisibleRows();
+    const dayCount = getEmployeesByShift(dateKey, '주간').length;
+    const nightCount = getEmployeesByShift(dateKey, '야간').length;
+    const dayWarn = dayCount !== state.slotConfig.주간;
+    const nightWarn = state.visibleRows.야간 ? (nightCount !== state.slotConfig.야간) : false;
+    return {
+      dayCount,
+      nightCount,
+      isWarn: dayWarn || nightWarn
+    };
+  }
+
+  function normalizeTagClass(tag){
+    if(/^대휴\(.+\)$/.test(tag)) return 'tag-대휴custom';
+    return 'tag-' + tag
+      .replaceAll('&','')
+      .replaceAll('(','')
+      .replaceAll(')','')
+      .replaceAll('/','')
+      .replaceAll(' ','');
+  }
+
+  function renderChip(item, dateKey, shift){
+    const classes = item.entry.tags.map(normalizeTagClass).join(' ');
+    const text = item.entry.tags.length
+      ? `${item.employee.name} (${item.entry.tags.join(', ')})`
+      : item.employee.name;
+
+    const base = shift === '야간' ? 'person-chip night-chip' : (shift === '휴무' ? 'off-chip' : 'person-chip');
+    const focusClass = Number(state.selectedEmployeeId) === Number(item.employee.id) ? 'employee-focus' : '';
+    const clickable = isAdmin()
+      ? `draggable="true"
+         ondragstart="dragStart(event, ${item.employee.id}, '${dateKey}', '${shift}')"
+         onclick="openAssignmentModal(${item.employee.id}, '${dateKey}')"
+         title="클릭: 수정 / 드래그: 이동"`
+      : `draggable="false" title="${text}"`;
+
+    return `
+      <button
+        class="${base} ${classes} ${focusClass}"
+        ${clickable}
+      >
+        ${text}
+      </button>
+    `;
+  }
+
+  function renderShiftRow(label, items, slotCount, dateKey){
+    const rowClass =
+      label === '조출' ? 'shift-row-early' :
+      label === '주간' ? 'shift-row-day' :
+      label === '야간' ? 'shift-row-night' :
+      'shift-row-off';
+
+    let html = `
+      <div class="shift-block ${rowClass}"
+           ondragover="allowDrop(event)"
+           ondragleave="dragLeave(event)"
+           ondrop="handleDrop(event, '${dateKey}', '${label}')">
+        <div class="shift-label">${label}</div>
+        <div class="slot-area">
+    `;
+
+    if(label === '휴무'){
+      if(items.length === 0){
+        if(isAdmin()) html += `<button class="empty-slot no-print" onclick="openAssignBySlot('${dateKey}', '휴무')">추가</button>`;
+      }else{
+        html += items.map(item => renderChip(item, dateKey, '휴무')).join('');
+        if(isAdmin()) html += `<button class="empty-slot no-print" onclick="openAssignBySlot('${dateKey}', '휴무')">+ 추가</button>`;
+      }
+    }else{
+      for(let i=0; i<items.length; i++){
+        html += renderChip(items[i], dateKey, label);
+      }
+      const remain = Math.max(0, slotCount - items.length);
+      if(isAdmin()){
+        for(let i=0; i<remain; i++){
+          html += `<button class="empty-slot no-print" onclick="openAssignBySlot('${dateKey}', '${label}')">빈자리 ${i+1}</button>`;
+        }
+      }
+    }
+
+    html += `</div></div>`;
+    return html;
+  }
+
+  function getDayCellClasses(dateKey, isCurrentMonth, holiday, subHoliday){
+    let cellClass = 'day-cell';
+    if(!isCurrentMonth) cellClass += ' other-month';
+    if(holiday) cellClass += ' holiday';
+    if(subHoliday) cellClass += ' subholiday';
+    if(state.selectedEmployeeId && isCurrentMonth){
+      const selectedEntry = getEntry(Number(state.selectedEmployeeId), dateKey);
+      if(selectedEntry.shift === '휴무'){
+        cellClass += ' emp-off-highlight';
+      }else{
+        cellClass += ' emp-work-highlight';
+      }
+      if(isViewerWishOffMode()){
+        cellClass += isWishOffTagged(selectedEntry) ? ' wishoff-selected' : ' wishoff-target';
+      }
+    }
+    return cellClass;
+  }
+
+  function renderDayContent({
+    dateKey,
+    dayNumber,
+    holiday,
+    subHoliday,
+    isCurrentMonth,
+    numClass,
+    earlyItems,
+    dayItems,
+    nightItems,
+    offItems,
+    validation,
+    isCopied
+  }){
+    let html = `
+      <div class="day-head">
+        <div>
+          <div class="day-num ${numClass}">${dayNumber}</div>
+          <div class="mini-actions no-print ${isAdmin() ? '' : 'hidden'}">
+            <button class="mini-btn ${isCopied ? 'copy-active' : ''}" onclick="copyDateConfig('${dateKey}')">복사</button>
+            <button class="mini-btn" onclick="pasteDateConfig('${dateKey}')">붙여넣기</button>
+          </div>
+        </div>
+        <div class="badge-wrap">
+          ${holiday ? `<span class="holiday-badge">${holiday.name}</span>` : ''}
+          ${subHoliday ? `<span class="subholiday-badge">${subHoliday.name}</span>` : ''}
+        </div>
+      </div>
+    `;
+
+    if(state.visibleRows?.조출 && (state.slotConfig.조출 || 0) > 0){
+      html += renderShiftRow('조출', earlyItems, state.slotConfig.조출, dateKey);
+    }
+    html += renderShiftRow('주간', dayItems, state.slotConfig.주간, dateKey);
+    if(state.visibleRows?.야간 !== false){
+      html += renderShiftRow('야간', nightItems, state.slotConfig.야간, dateKey);
+    }
+    html += renderShiftRow('휴무', offItems, 0, dateKey);
+
+    if(isCurrentMonth && isAdmin()){
+      html += `
+        <div class="count-row no-print">
+          <span class="count-pill ${validation.dayCount !== state.slotConfig.주간 ? 'bad' : ''}">
+            주간 ${validation.dayCount}/${state.slotConfig.주간}
+          </span>
+          <span class="count-pill ${validation.nightCount !== state.slotConfig.야간 ? 'bad' : ''}">
+            야간 ${validation.nightCount}/${state.slotConfig.야간}
+          </span>
+        </div>
+      `;
+    }
+
+    return html;
+  }
+
+  function renderMobileCalendar(days){
+    let html = '<div class="mobile-calendar">';
+
+    for(let d=1; d<=days; d++){
+      const dateKey = dKey(state.year, state.month, d);
+      const date = parseDateKey(dateKey);
+      const dow = date.getDay();
+      const numClass = dow === 0 ? 'sun' : (dow === 6 ? 'sat' : '');
+      const holiday = state.holidays[dateKey];
+      const subHoliday = state.subHolidays[dateKey];
+      const earlyItems = getEmployeesByShift(dateKey, '조출');
+      const dayItems = getEmployeesByShift(dateKey, '주간');
+      const nightItems = getEmployeesByShift(dateKey, '야간');
+      const offItems = getEmployeesByShift(dateKey, '휴무');
+      const validation = validateDay(dateKey);
+      const cardClasses = getDayCellClasses(dateKey, true, holiday, subHoliday)
+        .split(' ')
+        .filter(cls => cls !== 'day-cell')
+        .join(' ');
+      const wishOffAttrs = getWishOffCellAttributes(dateKey, true);
+
+      html += `
+        <section class="mobile-day-card ${cardClasses}" ${wishOffAttrs}>
+          ${renderDayContent({
+            dateKey,
+            dayNumber: d,
+            holiday,
+            subHoliday,
+            isCurrentMonth: true,
+            numClass,
+            earlyItems,
+            dayItems,
+            nightItems,
+            offItems,
+            validation,
+            isCopied: state.copiedDateKey === dateKey
+          })}
+        </section>
+      `;
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  function renderCalendar(){
+    ensureScheduleForMonth(state.year, state.month);
+    document.getElementById('monthLabel').textContent = `${state.year}년 ${state.month}월`;
+    const selectedEmp = state.selectedEmployeeId
+      ? state.employees.find(e => Number(e.id) === Number(state.selectedEmployeeId))
+      : null;
+    document.getElementById('printTitle').textContent = selectedEmp
+      ? `${state.year}년 ${state.month}월 근무표 (${selectedEmp.name})`
+      : `${state.year}년 ${state.month}월 근무표`;
+
+    const weeks = getRenderWeeks(state.year, state.month);
+    const realWeekCount = weeks.filter(week => isRealMonthInWeek(week, state.year, state.month)).length;
+    const currentMonthDays = getDays(state.year, state.month);
+    const printRowHeight = '27.6mm';
+
+    let html = `
+      <div class="desktop-calendar">
+      <table class="calendar ${realWeekCount === 5 ? 'five-week-month' : 'six-week-month'}" data-week-count="6" style="--print-row-height:${printRowHeight}">
+        <thead>
+          <tr>
+            <th class="sun">일요일</th>
+            <th>월요일</th>
+            <th>화요일</th>
+            <th>수요일</th>
+            <th>목요일</th>
+            <th>금요일</th>
+            <th class="sat">토요일</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+
+    weeks.forEach((week, weekIndex) => {
+      const isExtraWeek = weekIndex === 5 && !isRealMonthInWeek(week, state.year, state.month);
+      html += `<tr class="${isExtraWeek ? 'extra-week' : ''}">`;
+      for(const date of week){
+        const y = date.getFullYear();
+        const m = date.getMonth() + 1;
+        const d = date.getDate();
+        const dateKey = dKey(y,m,d);
+        const isCurrentMonth = y === state.year && m === state.month;
+        const dow = date.getDay();
+        const numClass = dow === 0 ? 'sun' : (dow === 6 ? 'sat' : '');
+
+        const holiday = state.holidays[dateKey];
+        const subHoliday = state.subHolidays[dateKey];
+        const earlyItems = getEmployeesByShift(dateKey, '조출');
+        const dayItems = getEmployeesByShift(dateKey, '주간');
+        const nightItems = getEmployeesByShift(dateKey, '야간');
+        const offItems = getEmployeesByShift(dateKey, '휴무');
+        const validation = validateDay(dateKey);
+        const cellClass = getDayCellClasses(dateKey, isCurrentMonth, holiday, subHoliday);
+        const wishOffAttrs = getWishOffCellAttributes(dateKey, isCurrentMonth);
+
+        html += `<td class="${cellClass}" ${wishOffAttrs}>`;
+        html += renderDayContent({
+          dateKey,
+          dayNumber: d,
+          holiday,
+          subHoliday,
+          isCurrentMonth,
+          numClass,
+          earlyItems,
+          dayItems,
+          nightItems,
+          offItems,
+          validation,
+          isCopied: state.copiedDateKey === dateKey
+        });
+        html += `</td>`;
+      }
+      html += '</tr>';
+    });
+
+    html += `</tbody></table></div>`;
+    html += renderMobileCalendar(currentMonthDays);
+    document.getElementById('calendarWrap').innerHTML = html;
+  }
+
+  function getWishOffCellAttributes(dateKey, isCurrentMonth){
+    if(!isCurrentMonth || !isViewerWishOffMode()) return '';
+    return `onclick="handleViewerWishOffClick('${dateKey}')" title="희망휴무 신청/해제"`;
+  }
+
+  function triggerPrint(){
+    const view = document.getElementById('view-calendar');
+    const stylesheet = document.querySelector('link[rel="stylesheet"]');
+    if(!view || !stylesheet){
+      alert('인쇄할 화면을 아직 준비하지 못했어. 잠시 후 다시 시도해줘.');
+      return;
+    }
+
+    const popup = window.open('', '_blank', 'width=1280,height=900');
+    const title = document.getElementById('printTitle')?.textContent || `${state.year}년 ${state.month}월 근무표`;
+    const rootStyle = document.documentElement.style.cssText || '';
+    const printMarkup = `
+      <!DOCTYPE html>
+      <html lang="ko">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>${escapeHtml(title)}</title>
+        <link rel="stylesheet" href="${stylesheet.href}" />
+        <style>:root{${rootStyle}}</style>
+      </head>
+      <body>
+        <div class="app">
+          ${view.outerHTML}
+        </div>
+        <script>
+          window.addEventListener('load', function(){
+            setTimeout(function(){
+              window.focus();
+              window.print();
+            }, 250);
+          });
+          window.addEventListener('afterprint', function(){
+            window.close();
+          });
+        <\/script>
+      </body>
+      </html>
+    `;
+
+    if(popup){
+      popup.document.open();
+      popup.document.write(printMarkup);
+      popup.document.close();
+      return;
+    }
+
+    if(typeof window.print === 'function'){
+      setTimeout(() => window.print(), 150);
+      return;
+    }
+
+    alert('이 기기에서는 인쇄 창을 열지 못했어. 팝업 차단을 해제하거나 다른 브라우저에서 다시 시도해줘.');
+  }
+
+  function renderEmployees(){
+    let html = `
+      <thead>
+        <tr>
+          <th style="width:80px">ID</th>
+          <th>이름</th>
+          <th style="width:120px">기본 근무</th>
+          <th style="width:220px">관리</th>
+        </tr>
+      </thead>
+      <tbody>
+    `;
+
+    for(const emp of state.employees){
+      html += `
+        <tr>
+          <td>${emp.id}</td>
+          <td>${emp.name}</td>
+          <td>${emp.role}</td>
+          <td>
+            <button class="btn" onclick="openEmployeeModal(${emp.id})">수정</button>
+            <button class="btn danger" onclick="deleteEmployee(${emp.id})">삭제</button>
+          </td>
+        </tr>
+      `;
+    }
+
+    html += '</tbody>';
+    document.getElementById('employeeTable').innerHTML = html;
+  }
+
+  function renderHolidayTables(){
+    const holidayRows = Object.entries(state.holidays)
+      .sort((a,b)=>a[0].localeCompare(b[0]))
+      .map(([date,v])=>`
+        <tr>
+          <td>${date}</td>
+          <td>${v.name}</td>
+          <td><button class="btn danger" onclick="removeHoliday('${date}')">삭제</button></td>
+        </tr>
+      `).join('');
+
+    document.getElementById('holidayTable').innerHTML = `
+      <thead><tr><th>날짜</th><th>이름</th><th>관리</th></tr></thead>
+      <tbody>${holidayRows || `<tr><td colspan="3" class="muted">등록된 공휴일이 없습니다.</td></tr>`}</tbody>
+    `;
+
+    const subRows = Object.entries(state.subHolidays)
+      .sort((a,b)=>a[0].localeCompare(b[0]))
+      .map(([date,v])=>`
+        <tr>
+          <td>${date}</td>
+          <td>${v.name}</td>
+          <td><button class="btn danger" onclick="removeSubHoliday('${date}')">삭제</button></td>
+        </tr>
+      `).join('');
+
+    document.getElementById('subHolidayTable').innerHTML = `
+      <thead><tr><th>날짜</th><th>이름</th><th>관리</th></tr></thead>
+      <tbody>${subRows || `<tr><td colspan="3" class="muted">등록된 대체휴무일이 없습니다.</td></tr>`}</tbody>
+    `;
+  }
+
+  function getWeekBuckets(y,m){
+    const days = getDays(y,m);
+    const buckets = [];
+    let start = 1;
+    while(start <= days){
+      const end = Math.min(start + 6, days);
+      buckets.push({ start, end });
+      start += 7;
+    }
+    return buckets;
+  }
+
+  function formatWeeklyType(value){
+    const int = Math.floor(value);
+    const decimal = value - int;
+    if(decimal === 0) return `주 ${int}일`;
+    if(Math.abs(decimal - 0.5) < 0.01) return `주 ${int}.5일`;
+    return `주 ${value.toFixed(1)}일`;
+  }
+
+  function calculateStats(){
+    ensureScheduleForMonth(state.year, state.month);
+    const weekBuckets = getWeekBuckets(state.year, state.month);
+
+    return state.employees.map(emp=>{
+      let dayShift = 0;
+      let nightShift = 0;
+      let offShift = 0;
+      const weeklyCounts = [];
+
+      for(let w=0; w<weekBuckets.length; w++){
+        let count = 0;
+        for(let d=weekBuckets[w].start; d<=weekBuckets[w].end; d++){
+          const key = dKey(state.year, state.month, d);
+          const entry = getEntry(emp.id, key);
+          if(entry.shift === '조출' || entry.shift === '주간'){
+            dayShift++;
+            count++;
+          }else if(entry.shift === '야간'){
+            nightShift++;
+            count++;
+          }else{
+            offShift++;
+          }
+        }
+        weeklyCounts.push(count);
+      }
+
+      const totalWork = dayShift + nightShift;
+      const avgWeekly = weekBuckets.length ? totalWork / weekBuckets.length : 0;
+
+      return {
+        name: emp.name,
+        role: emp.role,
+        dayShift,
+        nightShift,
+        offShift,
+        totalWork,
+        weeklyCounts,
+        avgWeekly
+      };
+    });
+  }
+
+  function renderStats(){
+    const rows = calculateStats();
+
+    let html = `
+      <div class="muted" style="margin-bottom:12px">
+        기준: 주간 + 야간 = 근무일, 휴무 = 비근무일
+      </div>
+      <table class="basic">
+        <thead>
+          <tr>
+            <th>이름</th>
+            <th>기본 근무</th>
+            <th>주간 근무일</th>
+            <th>야간 근무일</th>
+            <th>휴무일</th>
+            <th>총 근무일</th>
+            <th>주차별 근무일</th>
+            <th>평균 주당 근무일</th>
+            <th>판정</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+
+    rows.forEach(item=>{
+      const weeklyText = item.weeklyCounts.map((v,i)=>`${i+1}주차 ${v}일`).join(' / ');
+      let judge = formatWeeklyType(item.avgWeekly);
+      if(item.avgWeekly >= 5.75) judge += ' · 과다';
+      else if(item.avgWeekly >= 5.25) judge += ' · 주 5일 이상';
+      else if(item.avgWeekly >= 4.75) judge += ' · 주 5일권';
+      else if(item.avgWeekly >= 4.25) judge += ' · 주 4.5일권';
+      else judge += ' · 주 4일권';
+
+      html += `
+        <tr>
+          <td>${item.name}</td>
+          <td>${item.role}</td>
+          <td>${item.dayShift}</td>
+          <td>${item.nightShift}</td>
+          <td>${item.offShift}</td>
+          <td><strong>${item.totalWork}</strong></td>
+          <td>${weeklyText}</td>
+          <td>${item.avgWeekly.toFixed(1)}일</td>
+          <td>${judge}</td>
+        </tr>
+      `;
+    });
+
+    html += '</tbody></table>';
+    document.getElementById('statsWrap').innerHTML = html;
+  }
+
+  function renderEmployeeFilter(){
+    const select = document.getElementById('employeeFilter');
+    const status = document.getElementById('filterStatus');
+    if(!select || !status) return;
+
+    const options = ['<option value="">전체 일정</option>']
+      .concat(state.employees.map(emp => `<option value="${emp.id}">${emp.name}</option>`));
+
+    select.innerHTML = options.join('');
+    select.value = state.selectedEmployeeId ? String(state.selectedEmployeeId) : '';
+
+    if(state.selectedEmployeeId){
+      const emp = state.employees.find(e => Number(e.id) === Number(state.selectedEmployeeId));
+      status.textContent = emp
+        ? `${emp.name}`
+        : '전체 일정';
+    }else{
+      status.textContent = '전체 일정';
+    }
+  }
+
+  function setEmployeeFilter(value){
+    state.selectedEmployeeId = value ? Number(value) : null;
+    if(!state.selectedEmployeeId) state.viewerWishOffMode = false;
+    saveState();
+    renderAll();
+  }
+
+  function clearEmployeeFilter(){
+    state.selectedEmployeeId = null;
+    state.viewerWishOffMode = false;
+    saveState();
+    renderAll();
+  }
+
+  function toggleWishOffMode(){
+    if(isAdmin()) return;
+    if(!state.selectedEmployeeId){
+      alert('먼저 본인 이름을 선택해줘.');
+      return;
+    }
+    state.viewerWishOffMode = !state.viewerWishOffMode;
+    renderAll();
+  }
+
+  async function handleViewerWishOffClick(dateKey){
+    if(!isViewerWishOffMode()) return;
+    const selectedId = Number(state.selectedEmployeeId);
+    const entry = getEntry(selectedId, dateKey);
+    const dt = parseDateKey(dateKey);
+    if(dt.getDay() === 0 || isHolidayDate(dateKey)){
+      alert('이미 기본 휴무인 날짜는 희망휴무 신청이 필요 없어.');
+      return;
+    }
+
+    showSyncStatus('saving');
+    try{
+      const res = await fetch('/api/request-wish-off', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employeeId: selectedId,
+          dateKey,
+          enabled: !isWishOffTagged(entry),
+          baseRevision: Number(state._revision || 0)
+        })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        throw new Error(data.error || '희망휴무 저장 실패');
+      }
+      const { isAdmin: _ignoredIsAdmin, ...safeState } = data.state || {};
+      state = { ...state, ...safeState };
+      if(!Array.isArray(state.notices)) state.notices = [];
+      state._revision = Number(state._revision || 0);
+      showSyncStatus('saved');
+      renderAll();
+    }catch(e){
+      showSyncStatus('error');
+      alert(e.message || '희망휴무 저장에 실패했어.');
+    }
+  }
+
+  function renderMemos(){
+    const panel = document.getElementById('memoPanel');
+    panel.classList.toggle('hidden', !state.memoOpen);
+
+    const memoToggleBtn = document.getElementById('memoToggleBtn');
+    if(memoToggleBtn){
+      memoToggleBtn.textContent = state.memoOpen ? '메모장 닫기' : '메모장 열기';
+      memoToggleBtn.classList.toggle('primary', state.memoOpen);
+    }
+
+    const wrap = document.getElementById('memoList');
+    const memos = [...state.memos].sort((a,b)=>b.updatedAt - a.updatedAt);
+
+    if(memos.length === 0){
+      wrap.innerHTML = `<div class="muted">저장된 메모가 없습니다.</div>`;
+      return;
+    }
+
+    wrap.innerHTML = memos.map(memo=>`
+      <div class="memo-item">
+        <div class="memo-item-head">
+          <div>
+            <div class="memo-item-title">${escapeHtml(memo.title || '(제목 없음)')}</div>
+            <div class="memo-item-date">수정: ${formatDateTime(memo.updatedAt)}</div>
+          </div>
+        </div>
+        <div class="memo-item-body">${escapeHtml(memo.content || '')}</div>
+        <div class="memo-actions">
+          <button class="btn small" onclick="editMemo(${memo.id})">수정</button>
+          <button class="btn small danger" onclick="deleteMemo(${memo.id})">삭제</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function toggleMemoPanel(){
+    if(!requireAdmin()) return;
+    state.memoOpen = !state.memoOpen;
+    saveState();
+    renderMemos();
+  }
+
+  function escapeHtml(str){
+    return String(str)
+      .replaceAll('&','&amp;')
+      .replaceAll('<','&lt;')
+      .replaceAll('>','&gt;')
+      .replaceAll('"','&quot;')
+      .replaceAll("'",'&#39;')
+      .replaceAll('\n','<br>');
+  }
+
+  function formatDateTime(ts){
+    const d = new Date(ts);
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2,'0');
+    const day = String(d.getDate()).padStart(2,'0');
+    const hh = String(d.getHours()).padStart(2,'0');
+    const mm = String(d.getMinutes()).padStart(2,'0');
+    return `${y}-${m}-${day} ${hh}:${mm}`;
+  }
+
+  function saveMemo(){
+    if(!requireAdmin()) return;
+    const title = document.getElementById('memoTitle').value.trim();
+    const content = document.getElementById('memoContent').value.trim();
+
+    if(!title && !content){
+      alert('메모 제목 또는 내용을 입력해줘.');
+      return;
+    }
+
+    const now = Date.now();
+
+    if(editingMemoId){
+      const target = state.memos.find(m=>m.id === editingMemoId);
+      if(target){
+        target.title = title;
+        target.content = content;
+        target.updatedAt = now;
+      }
+    } else {
+      state.memos.push({
+        id: now,
+        title,
+        content,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+
+    saveState();
+    resetMemoForm();
+    renderMemos();
+  }
+
+  function editMemo(id){
+    if(!requireAdmin()) return;
+    const memo = state.memos.find(m=>m.id === id);
+    if(!memo) return;
+
+    editingMemoId = id;
+    document.getElementById('memoTitle').value = memo.title || '';
+    document.getElementById('memoContent').value = memo.content || '';
+  }
+
+  function deleteMemo(id){
+    if(!requireAdmin()) return;
+    const memo = state.memos.find(m=>m.id === id);
+    if(!memo) return;
+    if(!confirm(`"${memo.title || '이 메모'}"를 삭제할까?`)) return;
+
+    state.memos = state.memos.filter(m=>m.id !== id);
+    if(editingMemoId === id){
+      resetMemoForm();
+    }
+    saveState();
+    renderMemos();
+  }
+
+  function resetMemoForm(){
+    editingMemoId = null;
+    document.getElementById('memoTitle').value = '';
+    document.getElementById('memoContent').value = '';
+  }
+
+  function applyRoleView(){
+    const adminMode = isAdmin();
+    document.querySelectorAll('.admin-only').forEach(el=>{
+      el.classList.toggle('hidden-by-role', !adminMode);
+    });
+    document.querySelectorAll('.viewer-only').forEach(el=>{
+      el.classList.toggle('hidden-by-role', adminMode);
+    });
+
+    const roleBadge = document.getElementById('roleBadge');
+    const adminBtn = document.getElementById('adminAuthBtn');
+    if(roleBadge){
+      roleBadge.textContent = adminMode ? '관리자 모드 · 편집 가능' : '읽기 전용 · 희망휴무만 입력 가능';
+      roleBadge.classList.toggle('admin', adminMode);
+      roleBadge.classList.toggle('viewer', !adminMode);
+    }
+    if(adminBtn){
+      adminBtn.textContent = adminMode ? '관리자 로그아웃' : '관리자 로그인';
+    }
+    const wishOffBtn = document.getElementById('wishOffModeBtn');
+    if(wishOffBtn){
+      wishOffBtn.textContent = state.viewerWishOffMode ? '희망휴무 입력 중' : '희망휴무 입력 켜기';
+      wishOffBtn.classList.toggle('toggle-active', !!state.viewerWishOffMode);
+    }
+
+    if(!adminMode){
+      state.activeTab = 'calendar';
+    }
+  }
+
+  function renderAll(){
+    ensureEarlyShiftSetting();
+    ensureVisibleRows();
+    applyHighlightColors();
+    applyRoleView();
+    renderLastSavedInfo();
+    const earlyBtn = document.getElementById('earlyShiftToggleBtn');
+    if(earlyBtn){
+      const earlyOn = state.visibleRows.조출 && (state.slotConfig.조출 > 0);
+      earlyBtn.textContent = earlyOn ? '조출줄 끄기' : '조출줄 켜기';
+      earlyBtn.classList.toggle('primary', earlyOn);
+    }
+    const nightBtn = document.getElementById('nightShiftToggleBtn');
+    if(nightBtn){
+      nightBtn.textContent = state.visibleRows.야간 ? '야간줄 끄기' : '야간줄 켜기';
+      nightBtn.classList.toggle('primary', state.visibleRows.야간);
+    }
+    renderCalendar();
+    renderEmployees();
+    renderHolidayTables();
+    renderStats();
+    renderEmployeeFilter();
+    renderNoticePanel();
+    renderMemos();
+
+    document.querySelectorAll('.tab').forEach(btn=>{
+      btn.classList.toggle('active', btn.dataset.tab === state.activeTab);
+    });
+
+    document.getElementById('view-calendar').classList.toggle('hidden', state.activeTab !== 'calendar');
+    document.getElementById('view-employees').classList.toggle('hidden', !isAdmin() || state.activeTab !== 'employees');
+    document.getElementById('view-holiday').classList.toggle('hidden', !isAdmin() || state.activeTab !== 'holiday');
+    document.getElementById('view-stats').classList.toggle('hidden', !isAdmin() || state.activeTab !== 'stats');
+    document.getElementById('view-changelog').classList.toggle('hidden', state.activeTab !== 'changelog');
+  }
+
+  function showTab(tab){
+    const publicTabs = ['calendar', 'changelog'];
+    if(!publicTabs.includes(tab) && !requireAdmin()) return;
+    state.activeTab = tab;
+    // changelog 탭 전환은 KV 저장 불필요
+    if(tab !== 'changelog') saveState();
+    renderAll();
+  }
+
+  function handleAdminAuth(){
+    if(isAdmin()){
+      clearAdminSession();
+      saveState();
+      renderAll();
+      return;
+    }
+
+    openModal(`
+      <div class="modal-head">
+        <div class="modal-title">관리자 로그인</div>
+        <button class="btn" onclick="closeModal()">닫기</button>
+      </div>
+
+      <div class="form-row">
+        <div class="field" style="min-width:260px">
+          <label>비밀번호</label>
+          <input id="adminPasswordInput" type="password" placeholder="관리자 비밀번호" onkeydown="if(event.key==='Enter') submitAdminLogin()" />
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">취소</button>
+        <button class="btn primary" onclick="submitAdminLogin()">로그인</button>
+      </div>
+    `);
+  }
+
+  async function submitAdminLogin(){
+    const value = document.getElementById('adminPasswordInput')?.value || '';
+    if(!value){
+      alert('비밀번호를 입력해줘.');
+      return;
+    }
+
+    try{
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: value })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok || !data.token){
+        alert(data.error || '비밀번호가 일치하지 않아.');
+        return;
+      }
+
+      sessionStorage.setItem(ADMIN_TOKEN_KEY, data.token);
+      state.isAdmin = true;
+      saveState();
+      closeModal();
+      renderAll();
+    }catch(e){
+      alert('로그인 중 오류가 발생했어. 잠시 후 다시 시도해줘.');
+    }
+  }
+
+  // ── 비밀번호 변경 모달 ──────────────────────────────────────
+  // ── 저장 모달 (변경 메모 입력 후 KV 전송) ──────────────────
+  function openSaveModal(){
+    if(!requireAdmin()) return;
+    const warnings = collectSaveWarnings();
+    openModal(`
+      <div class="modal-head">
+        <div class="modal-title">근무표 저장</div>
+        <button class="btn" onclick="closeModal()">닫기</button>
+      </div>
+      <div class="form-row" style="flex-direction:column;align-items:stretch;">
+        ${buildSaveWarningsMarkup(warnings)}
+        <div class="field" style="min-width:300px;width:100%;">
+          <label>변경이력 메모</label>
+          <input id="saveNoteInput" type="text" placeholder="예: 4월 야간 배정 수정"
+            onkeydown="if(event.key==='Enter') confirmSave()" />
+        </div>
+        <div class="field" style="min-width:300px;width:100%;">
+          <label>공지 내용 (선택)</label>
+          <textarea id="saveNoticeInput" class="memo-textarea" style="min-height:90px;" placeholder="예: 4월 야간 스케줄을 일부 조정했습니다. 확인 부탁드립니다."></textarea>
+        </div>
+        <div class="muted" style="font-size:12px;">변경이력 메모는 기록에 남고, 공지 내용은 사용자 화면 상단 공지에 누적 표시돼.</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">취소</button>
+        <button class="btn primary" onclick="confirmSave()">저장</button>
+      </div>
+    `);
+    setTimeout(()=>{ document.getElementById('saveNoteInput')?.focus(); }, 80);
+  }
+
+  async function confirmSave(){
+    const note = (document.getElementById('saveNoteInput')?.value || '').trim();
+    const notice = (document.getElementById('saveNoticeInput')?.value || '').trim();
+    if(!note){
+      alert('변경이력 메모를 입력해줘.');
+      return;
+    }
+    closeModal();
+    await explicitSave(note, notice);
+  }
+
+  function openRestoreManager(snapshotId = null){
+    if(!requireAdmin()) return;
+    const snapshots = Array.isArray(state.snapshots) ? state.snapshots : [];
+    if(!snapshots.length){
+      openModal(`
+        <div class="modal-head">
+          <div class="modal-title">복원 관리</div>
+          <button class="btn" onclick="closeModal()">닫기</button>
+        </div>
+        <div class="muted" style="font-size:13px;">아직 복원할 저장본이 없어. 관리자 저장이 1번 이상 있어야 해.</div>
+        <div class="modal-actions">
+          <button class="btn" onclick="closeModal()">닫기</button>
+        </div>
+      `);
+      return;
+    }
+
+    if(snapshotId == null){
+      restorePreviewSnapshotId = restorePreviewSnapshotId || Number(snapshots[0].id);
+    } else {
+      restorePreviewSnapshotId = Number(snapshotId);
+    }
+
+    const activeSnapshot = snapshots.find(item => Number(item.id) === Number(restorePreviewSnapshotId)) || snapshots[0];
+    restorePreviewSnapshotId = Number(activeSnapshot.id);
+
+    openModal(`
+      <div class="modal-head">
+        <div class="modal-title">복원 관리</div>
+        <button class="btn" onclick="closeModal()">닫기</button>
+      </div>
+      <div class="snapshot-layout">
+        <div class="snapshot-list">
+          ${snapshots.map(snapshot => `
+            <button class="snapshot-card ${Number(snapshot.id) === Number(activeSnapshot.id) ? 'active' : ''}" type="button" onclick="openRestoreManager(${Number(snapshot.id)})">
+              <div class="snapshot-card-title">${escHtml(snapshot.note || '근무표 수정')}</div>
+              <div class="snapshot-card-meta">${escHtml(snapshot.timestamp || '-')}</div>
+              <div class="snapshot-card-meta">${(snapshot.state?.year || '-') }년 ${(snapshot.state?.month || '-') }월 · rev ${Number(snapshot.revision || 0)}</div>
+            </button>
+          `).join('')}
+        </div>
+        <div class="snapshot-preview">
+          <div class="save-warning-title" style="margin-bottom:12px;">복원 전 미리보기</div>
+          ${buildSnapshotPreview(activeSnapshot)}
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">닫기</button>
+        <button class="btn primary" onclick="restoreSnapshot(${Number(activeSnapshot.id)})">이 저장본으로 복원</button>
+      </div>
+    `);
+  }
+
+  async function restoreSnapshot(snapshotId){
+    if(!requireAdmin()) return;
+    const snapshot = (Array.isArray(state.snapshots) ? state.snapshots : []).find(item => Number(item.id) === Number(snapshotId));
+    if(!snapshot){
+      alert('복원할 저장본을 찾지 못했어.');
+      return;
+    }
+    if(!confirm(`"${snapshot.note || '근무표 수정'}" 저장본으로 복원할까?\n현재 상태는 복원 전 자동 백업돼.`)) return;
+
+    showSyncStatus('saving');
+    try{
+      const res = await fetch('/api/restore-snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminToken: getAdminToken(),
+          baseRevision: Number(state._revision || 0),
+          snapshotId: Number(snapshotId)
+        })
+      });
+
+      if(res.status === 403){
+        clearAdminSession();
+        renderAll();
+        throw new Error('admin session expired');
+      }
+      if(res.status === 409){
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'restore conflict');
+      }
+      if(!res.ok) throw new Error('restore failed');
+
+      const data = await res.json();
+      const restored = data.state || {};
+      const { isAdmin: _ignoredIsAdmin, ...safeRestored } = restored;
+      state = { ...state, ...safeRestored };
+      if(!Array.isArray(state.notices)) state.notices = [];
+      if(!Array.isArray(state.snapshots)) state.snapshots = [];
+      state._revision = Number(data.revision || state._revision || 0);
+      state._lastSavedAt = data.timestamp || state._lastSavedAt || '';
+      markSaved();
+      closeModal();
+      await loadChangelog(true);
+      renderAll();
+      showSyncStatus('saved');
+    }catch(e){
+      showSyncStatus('error');
+      if(e.message === 'admin session expired'){
+        alert('관리자 세션이 만료됐어. 다시 로그인해줘.');
+      } else if(e.message){
+        alert(e.message);
+      }
+    }
+  }
+
+  // ── 옵션 드롭다운 토글 ────────────────────────────────────────
+  function toggleOptionsMenu(){
+    const menu = document.getElementById('optionsMenu');
+    if(!menu) return;
+    menu.classList.toggle('hidden');
+  }
+
+  // 옵션 메뉴 외부 클릭 시 닫기
+  document.addEventListener('click', (e)=>{
+    const wrap = document.getElementById('optionsWrap');
+    const menu = document.getElementById('optionsMenu');
+    if(menu && wrap && !wrap.contains(e.target)){
+      menu.classList.add('hidden');
+    }
+  });
+
+  // 옵션 항목 클릭 후 메뉴 닫기 (해당 항목이 모달을 열면 자동으로 닫힘)
+  document.addEventListener('click', (e)=>{
+    if(e.target.classList.contains('options-item')){
+      const menu = document.getElementById('optionsMenu');
+      if(menu) menu.classList.add('hidden');
+    }
+  });
+
+  function openChangePasswordModal(){
+    if(!requireAdmin()) return;
+    openModal(`
+      <div class="modal-head">
+        <div class="modal-title">관리자 비밀번호 변경</div>
+        <button class="btn" onclick="closeModal()">닫기</button>
+      </div>
+
+      <div class="form-row" style="flex-direction:column;gap:12px;">
+        <div class="field" style="min-width:280px">
+          <label>현재 비밀번호</label>
+          <input id="pwCurrent" type="password" placeholder="현재 비밀번호" />
+        </div>
+        <div class="field" style="min-width:280px">
+          <label>새 비밀번호</label>
+          <input id="pwNew" type="password" placeholder="새 비밀번호" />
+        </div>
+        <div class="field" style="min-width:280px">
+          <label>새 비밀번호 확인</label>
+          <input id="pwConfirm" type="password" placeholder="새 비밀번호 다시 입력"
+            onkeydown="if(event.key==='Enter') submitChangePassword()" />
+        </div>
+      </div>
+
+      <div id="pwChangeMsg" style="font-size:13px;margin-top:8px;min-height:20px;"></div>
+
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">취소</button>
+        <button class="btn primary" onclick="submitChangePassword()">변경</button>
+      </div>
+    `);
+  }
+
+  async function submitChangePassword(){
+    const currentVal = document.getElementById('pwCurrent')?.value || '';
+    const newVal     = document.getElementById('pwNew')?.value || '';
+    const confirmVal = document.getElementById('pwConfirm')?.value || '';
+    const msgEl      = document.getElementById('pwChangeMsg');
+
+    if(!newVal){ msgEl.textContent = '새 비밀번호를 입력해줘.'; msgEl.style.color='#dc2626'; return; }
+    if(newVal !== confirmVal){ msgEl.textContent = '새 비밀번호가 일치하지 않아.'; msgEl.style.color='#dc2626'; return; }
+    if(newVal.length < 4){ msgEl.textContent = '비밀번호는 4자 이상이어야 해.'; msgEl.style.color='#dc2626'; return; }
+    if(!currentVal){ msgEl.textContent = '현재 비밀번호를 입력해줘.'; msgEl.style.color='#dc2626'; return; }
+
+    msgEl.textContent = '변경 중…';
+    msgEl.style.color = '#2563eb';
+
+    try{
+      const res = await fetch('/api/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminToken: getAdminToken(),
+          currentPassword: currentVal,
+          newPassword: newVal
+        })
+      });
+      const data = await res.json();
+      if(!res.ok){
+        if(res.status === 403){
+          clearAdminSession();
+          renderAll();
+        }
+        msgEl.textContent = data.error || '변경 실패';
+        msgEl.style.color = '#dc2626';
+        return;
+      }
+      clearAdminSession();
+      renderAll();
+      msgEl.textContent = '✓ 비밀번호가 변경됐어. 다시 로그인해줘.';
+      msgEl.style.color = '#16a34a';
+      setTimeout(() => closeModal(), 1200);
+    }catch(e){
+      msgEl.textContent = '서버 오류. 다시 시도해줘.';
+      msgEl.style.color = '#dc2626';
+    }
+  }
+
+  function changeMonth(delta){
+    state.month += delta;
+    if(state.month > 12){
+      state.month = 1;
+      state.year++;
+    }
+    if(state.month < 1){
+      state.month = 12;
+      state.year--;
+    }
+    ensureScheduleForMonth(state.year, state.month);
+    saveState();
+    renderAll();
+  }
+
+  function addEmployee(){
+    if(!requireAdmin()) return;
+    const name = document.getElementById('empName').value.trim();
+    const role = document.getElementById('empRole').value;
+    if(!name){
+      alert('이름을 입력해줘.');
+      return;
+    }
+    const id = state.employees.length ? Math.max(...state.employees.map(e=>e.id)) + 1 : 1;
+    state.employees.push({ id, name, role });
+    ensureScheduleForMonth(state.year, state.month);
+    document.getElementById('empName').value = '';
+    saveState('직원 추가');
+    renderAll();
+  }
+
+  function deleteEmployee(empId){
+    if(!requireAdmin()) return;
+    const emp = state.employees.find(e=>e.id === empId);
+    if(!emp) return;
+    if(!confirm(`${emp.name} 직원을 삭제할까?`)) return;
+    state.employees = state.employees.filter(e=>e.id !== empId);
+    delete state.schedule[empId];
+    if(Number(state.selectedEmployeeId) === Number(empId)) state.selectedEmployeeId = null;
+    saveState();
+    renderAll();
+  }
+
+  function openEmployeeModal(empId = null){
+    if(!requireAdmin()) return;
+    const emp = empId ? state.employees.find(e=>e.id === empId) : null;
+    openModal(`
+      <div class="modal-head">
+        <div class="modal-title">${emp ? '직원 수정' : '직원 추가'}</div>
+        <button class="btn" onclick="closeModal()">닫기</button>
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label>이름</label>
+          <input id="modalEmpName" type="text" value="${emp ? emp.name : ''}" />
+        </div>
+        <div class="field">
+          <label>기본 근무</label>
+          <select id="modalEmpRole">
+            <option value="주간" ${emp && emp.role === '주간' ? 'selected' : ''}>주간</option>
+            <option value="야간" ${emp && emp.role === '야간' ? 'selected' : ''}>야간</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        ${emp ? `<button class="btn danger" onclick="deleteEmployee(${emp.id}); closeModal();">삭제</button>` : ''}
+        <button class="btn" onclick="closeModal()">취소</button>
+        <button class="btn primary" onclick="${emp ? `saveEmployeeEdit(${emp.id})` : `saveEmployeeCreate()`}">저장</button>
+      </div>
+    `);
+  }
+
+  function saveEmployeeCreate(){
+    if(!requireAdmin()) return;
+    const name = document.getElementById('modalEmpName').value.trim();
+    const role = document.getElementById('modalEmpRole').value;
+    if(!name){
+      alert('이름을 입력해줘.');
+      return;
+    }
+    const id = state.employees.length ? Math.max(...state.employees.map(e=>e.id)) + 1 : 1;
+    state.employees.push({ id, name, role });
+    ensureScheduleForMonth(state.year, state.month);
+    refreshDefaultEntriesForMonth(state.year, state.month);
+    saveState();
+    closeModal();
+    renderAll();
+  }
+
+  function saveEmployeeEdit(empId){
+    if(!requireAdmin()) return;
+    const name = document.getElementById('modalEmpName').value.trim();
+    const role = document.getElementById('modalEmpRole').value;
+    if(!name){
+      alert('이름을 입력해줘.');
+      return;
+    }
+    const emp = state.employees.find(e=>e.id === empId);
+    if(!emp) return;
+    emp.name = name;
+    emp.role = role;
+    refreshDefaultEntriesForMonth(state.year, state.month);
+    saveState(`${emp.name} 역할 변경 → ${role}`);
+    closeModal();
+    renderAll();
+  }
+
+  function openAssignmentModal(empId, dateKey){
+    if(!requireAdmin()) return;
+    const emp = state.employees.find(e=>e.id === empId);
+    const entry = getEntry(empId, dateKey);
+    const customDaehuTag = entry.tags.find(tag => /^대휴\((.*)\)$/.test(tag)) || '';
+    const customDaehuDate = customDaehuTag ? customDaehuTag.replace(/^대휴\((.*)\)$/, '$1') : '';
+
+    const checks = TAGS.map(tag=>`
+      <label class="tag-label">
+        <input type="checkbox" value="${tag}" ${entry.tags.includes(tag) ? 'checked' : ''} />
+        <span class="${normalizeTagClass(tag)}" style="padding:4px 8px;border-radius:999px;border:1px solid transparent">${tag}</span>
+      </label>
+    `).join('');
+
+    openModal(`
+      <div class="modal-head">
+        <div class="modal-title">${emp.name} · ${dateKey}</div>
+        <button class="btn" onclick="closeModal()">닫기</button>
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label>근무 유형</label>
+          <select id="assignShift">
+            <option value="조출" ${entry.shift === '조출' ? 'selected' : ''}>조출</option>
+            <option value="주간" ${entry.shift === '주간' ? 'selected' : ''}>주간</option>
+            <option value="야간" ${entry.shift === '야간' ? 'selected' : ''}>야간</option>
+            <option value="휴무" ${entry.shift === '휴무' ? 'selected' : ''}>휴무</option>
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <div style="font-weight:800; margin-bottom:8px">태그</div>
+        <div class="tag-box" id="assignTags">${checks}</div>
+      </div>
+
+      <div class="form-row" style="margin-top:12px">
+        <div class="field" style="min-width:220px">
+          <label>대휴 날짜 직접 입력</label>
+          <input id="customDaehuDate" type="text" placeholder="예: 3/18 또는 18" value="${customDaehuDate}" />
+        </div>
+        <div class="muted" style="font-size:12px; align-self:center; padding-bottom:2px;">입력하면 태그가 대휴(입력값) 형식으로 저장돼</div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn danger" onclick="clearAssignment(${empId}, '${dateKey}')">기본값으로</button>
+        <button class="btn" onclick="closeModal()">취소</button>
+        <button class="btn primary" onclick="saveAssignment(${empId}, '${dateKey}')">저장</button>
+      </div>
+    `);
+  }
+
+  function openAssignBySlot(dateKey, shift){
+    if(!requireAdmin()) return;
+    const assignedIds = new Set(getEmployeesByShift(dateKey, shift).map(x=>x.employee.id));
+    const available = state.employees.filter(emp => !assignedIds.has(emp.id));
+
+    const options = available.map(emp=>`
+      <option value="${emp.id}">${emp.name} (${emp.role})</option>
+    `).join('');
+
+    openModal(`
+      <div class="modal-head">
+        <div class="modal-title">${dateKey} · ${shift} 배정</div>
+        <button class="btn" onclick="closeModal()">닫기</button>
+      </div>
+
+      <div class="form-row">
+        <div class="field" style="min-width:260px">
+          <label>직원 선택</label>
+          <select id="slotAssignEmp">
+            ${options || `<option value="">배정 가능한 직원 없음</option>`}
+          </select>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">취소</button>
+        <button class="btn primary" onclick="saveAssignBySlot('${dateKey}', '${shift}')">배정</button>
+      </div>
+    `);
+  }
+
+  function saveAssignBySlot(dateKey, shift){
+    if(!requireAdmin()) return;
+    const empId = Number(document.getElementById('slotAssignEmp').value);
+    if(!empId){
+      closeModal();
+      return;
+    }
+    state.schedule[empId][dateKey].shift = shift;
+    saveState();
+    closeModal();
+    renderAll();
+  }
+
+  function clearAssignment(empId, dateKey){
+    if(!requireAdmin()) return;
+    const emp = state.employees.find(e=>e.id === empId);
+    state.schedule[empId][dateKey] = createDefaultEntry(emp, dateKey);
+    saveState(`${emp.name} ${dateKey} 기본값으로 초기화`);
+    closeModal();
+    renderAll();
+  }
+
+  function saveAssignment(empId, dateKey){
+    if(!requireAdmin()) return;
+    const shift = document.getElementById('assignShift').value;
+    const tags = [...document.querySelectorAll('#assignTags input[type="checkbox"]:checked')].map(el=>el.value);
+    const customDaehuDate = (document.getElementById('customDaehuDate')?.value || '').trim();
+
+    if(customDaehuDate){
+      tags.push(`대휴(${customDaehuDate})`);
+    }
+
+    state.schedule[empId][dateKey] = { shift, tags };
+    const emp2 = state.employees.find(e=>e.id===empId);
+    saveState(`${emp2 ? emp2.name : empId} ${dateKey} → ${shift}`);
+    closeModal();
+    renderAll();
+  }
+
+
+  function toggleEarlyShiftRow(){
+    if(!requireAdmin()) return;
+    ensureEarlyShiftSetting();
+    ensureVisibleRows();
+    if(state.visibleRows.조출 && (state.slotConfig.조출 > 0)){
+      state.visibleRows.조출 = false;
+    }else{
+      if((state.slotConfig.조출 || 0) === 0) state.slotConfig.조출 = 1;
+      state.visibleRows.조출 = true;
+    }
+    saveState();
+    renderAll();
+  }
+
+  function toggleNightShiftRow(){
+    if(!requireAdmin()) return;
+    ensureVisibleRows();
+    state.visibleRows.야간 = !state.visibleRows.야간;
+    saveState();
+    renderAll();
+  }
+
+  function openSlotConfigModal(){
+    if(!requireAdmin()) return;
+    openModal(`
+      <div class="modal-head">
+        <div class="modal-title">근무 슬롯 설정</div>
+        <button class="btn" onclick="closeModal()">닫기</button>
+      </div>
+
+      <div class="form-row">
+        <div class="field">
+          <label>조출 슬롯 수</label>
+          <input id="slotEarly" type="number" min="0" value="${state.slotConfig.조출 || 0}" />
+        </div>
+        <div class="field">
+          <label>주간 슬롯 수</label>
+          <input id="slotDay" type="number" min="0" value="${state.slotConfig.주간}" />
+        </div>
+        <div class="field">
+          <label>야간 슬롯 수</label>
+          <input id="slotNight" type="number" min="0" value="${state.slotConfig.야간}" />
+        </div>
+      </div>
+      <div class="muted" style="font-size:12px; margin-top:4px;">
+        조출 슬롯 수가 1 이상이면 조출줄을 켤 수 있고, 야간줄도 상단 버튼으로 켜고 끌 수 있어.
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">취소</button>
+        <button class="btn primary" onclick="saveSlotConfig()">저장</button>
+      </div>
+    `);
+  }
+
+  function saveSlotConfig(){
+    if(!requireAdmin()) return;
+    ensureEarlyShiftSetting();
+    state.slotConfig.조출 = Number(document.getElementById('slotEarly').value || 0);
+    state.slotConfig.주간 = Number(document.getElementById('slotDay').value || 0);
+    state.slotConfig.야간 = Number(document.getElementById('slotNight').value || 0);
+    saveState('근무 슬롯 설정 변경');
+    closeModal();
+    renderAll();
+  }
+
+  function addHoliday(){
+    if(!requireAdmin()) return;
+    const date = document.getElementById('holidayDate').value;
+    const name = document.getElementById('holidayName').value.trim();
+    if(!date || !name){
+      alert('날짜와 이름을 모두 입력해줘.');
+      return;
+    }
+    state.holidays[date] = { name };
+    refreshDefaultEntriesForMonth(state.year, state.month);
+    document.getElementById('holidayDate').value = '';
+    document.getElementById('holidayName').value = '';
+    saveState('공휴일 등록');
+    renderAll();
+  }
+
+  function removeHoliday(date){
+    if(!requireAdmin()) return;
+    delete state.holidays[date];
+    refreshDefaultEntriesForMonth(state.year, state.month);
+    saveState('공휴일 삭제');
+    renderAll();
+  }
+
+  function addSubHoliday(){
+    if(!requireAdmin()) return;
+    const date = document.getElementById('subDate').value;
+    const name = document.getElementById('subName').value.trim();
+    if(!date || !name){
+      alert('날짜와 이름을 모두 입력해줘.');
+      return;
+    }
+    state.subHolidays[date] = { name };
+    document.getElementById('subDate').value = '';
+    document.getElementById('subName').value = '';
+    saveState('대체휴무일 등록');
+    renderAll();
+  }
+
+  function removeSubHoliday(date){
+    if(!requireAdmin()) return;
+    delete state.subHolidays[date];
+    saveState('대체휴무일 삭제');
+    renderAll();
+  }
+
+  function resetCurrentMonth(){
+    if(!requireAdmin()) return;
+    if(!confirm(`${state.year}년 ${state.month}월을 기본값으로 다시 생성할까?`)) return;
+    const prefix = getMonthKeyPrefix(state.year, state.month);
+    for(const empId in state.schedule){
+      for(const key in state.schedule[empId]){
+        if(key.startsWith(prefix)) delete state.schedule[empId][key];
+      }
+    }
+    ensureScheduleForMonth(state.year, state.month);
+    saveState('현재 월 초기화');
+    renderAll();
+  }
+
+  function copyDateConfig(dateKey){
+    if(!requireAdmin()) return;
+    state.copiedDateKey = dateKey;
+    saveState();
+    renderAll();
+  }
+
+  function pasteDateConfig(targetDateKey){
+    if(!requireAdmin()) return;
+    if(!state.copiedDateKey){
+      alert('먼저 복사할 날짜를 선택해줘.');
+      return;
+    }
+    if(state.copiedDateKey === targetDateKey) return;
+
+    for(const emp of state.employees){
+      const sourceEntry = getEntry(emp.id, state.copiedDateKey);
+      state.schedule[emp.id][targetDateKey] = {
+        shift: sourceEntry.shift,
+        tags: [...sourceEntry.tags]
+      };
+    }
+
+    saveState('날짜 복사 붙여넣기');
+    renderAll();
+  }
+
+  function dragStart(e, empId, fromDate, fromShift){
+    if(!requireAdmin()) return;
+    dragData = { empId, fromDate, fromShift };
+  }
+
+  function allowDrop(e){
+    e.preventDefault();
+    e.currentTarget.classList.add('drag-over');
+  }
+
+  function dragLeave(e){
+    e.currentTarget.classList.remove('drag-over');
+  }
+
+  function handleDrop(e, toDate, toShift){
+    if(!requireAdmin()) return;
+    e.preventDefault();
+    e.currentTarget.classList.remove('drag-over');
+    if(!dragData) return;
+
+    const { empId, fromDate, fromShift } = dragData;
+    dragData = null;
+
+    if(fromDate === toDate && fromShift === toShift) return;
+
+    if(fromDate === toDate){
+      state.schedule[empId][toDate].shift = toShift;
+    } else {
+      state.schedule[empId][fromDate].shift = '휴무';
+      state.schedule[empId][toDate].shift = toShift;
+    }
+
+    saveState('드래그로 배정 변경');
+    renderAll();
+  }
+
+  function openModal(html){
+    document.getElementById('modalBox').innerHTML = html;
+    document.getElementById('modalBg').classList.add('open');
+  }
+
+  function closeModal(){
+    restorePreviewSnapshotId = null;
+    document.getElementById('modalBg').classList.remove('open');
+  }
+
+  document.getElementById('modalBg').addEventListener('click', (e)=>{
+    if(e.target.id === 'modalBg') closeModal();
+  });
+
+  // ── 변경이력 로드 ─────────────────────────────────────────
+  let changelogCache = [];
+  async function loadChangelog(forceFresh = false){
+    const el = document.getElementById('changelogList');
+    const badge = document.getElementById('changelogSyncStatus');
+    if(!el) return;
+    if(badge){ badge.textContent='불러오는 중…'; badge.className='sync-badge loading'; badge.style.display='inline-flex'; }
+    try{
+      const url = forceFresh ? '/api/changelog?fresh=1' : '/api/changelog';
+      const res = await fetch(url);
+      const logs = await res.json();
+      changelogCache = logs;
+      knownLatestChangeId = logs[0]?.id ?? knownLatestChangeId;
+      renderNoticePanel();
+      if(badge){ badge.style.display='none'; }
+      if(!logs.length){
+        el.innerHTML = `
+          <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">
+            <button class="btn small" type="button" onclick="openReportModal()">보고문 만들기</button>
+          </div>
+          <div class="muted" style="font-size:13px;padding:8px 0;">아직 변경이력이 없어.</div>
+        `;
+        return;
+      }
+      el.innerHTML = `
+        <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">
+          <button class="btn small" type="button" onclick="openReportModal()">보고문 만들기</button>
+        </div>
+      ` + logs.map(log => `
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:#fff;border:1px solid var(--line);border-radius:12px;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:800;margin-bottom:3px;">${escHtml(log.note)}</div>
+            <div style="font-size:12px;color:var(--muted);">${escHtml(log.timestamp)} · ${log.year}년 ${log.month}월</div>
+          </div>
+        </div>
+      `).join('');
+    }catch(e){
+      if(badge){ badge.textContent='오류'; badge.className='sync-badge error'; badge.style.display='inline-flex'; }
+      el.innerHTML = '<div class="muted" style="font-size:13px;padding:8px 0;">불러오기 실패. 잠시 후 다시 시도해줘.</div>';
+    }
+  }
+
+  function escHtml(str){ return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  async function refreshFromServer(){
+    await loadState(true);
+    ensureHighlightColors();
+    ensureEarlyShiftSetting();
+    ensureVisibleRows();
+    applyHighlightColors();
+    ensureScheduleForMonth(state.year, state.month);
+    await loadChangelog(true);
+    renderAll();
+  }
+
+  // ── 초기화 ──────────────────────────────────────────────────
+  (async () => {
+    await loadState();
+    await restoreAdminSession();
+    ensureHighlightColors();
+    ensureEarlyShiftSetting();
+    ensureVisibleRows();
+    applyHighlightColors();
+    ensureScheduleForMonth(state.year, state.month);
+    markSaved(); // 초기 로드 시 미저장 없음
+    await loadChangelog();
+    renderAll();
+  })();
+
+/* 메모장 드래그 기능 */
+(function(){
+  let isDragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  const panel = document.getElementById('memoPanel');
+  const header = document.getElementById('memoHeader');
+
+  if(!panel || !header) return;
+
+  header.addEventListener('mousedown', function(e){
+    isDragging = true;
+    const rect = panel.getBoundingClientRect();
+    offsetX = e.clientX - rect.left;
+    offsetY = e.clientY - rect.top;
+
+    panel.style.left = rect.left + 'px';
+    panel.style.top = rect.top + 'px';
+    panel.style.right = 'auto';
+  });
+
+  document.addEventListener('mousemove', function(e){
+    if(!isDragging) return;
+    panel.style.left = (e.clientX - offsetX) + 'px';
+    panel.style.top = (e.clientY - offsetY) + 'px';
+  });
+
+  document.addEventListener('mouseup', function(){
+    isDragging = false;
+  });
+})();

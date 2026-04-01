@@ -1,4 +1,4 @@
-:root{
+﻿  :root{
     --bg:#f4f6fb;
     --card:#ffffff;
     --line:#d8dee9;
@@ -223,10 +223,224 @@
     font-weight:800;
     color:var(--muted);
   }
+
+  .sync-badge{
+    display:inline-flex;
+    align-items:center;
+    gap:5px;
+    padding:5px 10px;
+    border-radius:999px;
+    font-size:12px;
+    font-weight:700;
+    border:1px solid var(--line);
+    background:#fff;
+    color:var(--muted);
+    transition:all .3s;
+  }
+  .meta-badge{
+    display:inline-flex;
+    align-items:center;
+    gap:5px;
+    padding:7px 10px;
+    border-radius:999px;
+    font-size:12px;
+    font-weight:700;
+    color:#475569;
+    border:1px solid #cbd5e1;
+    background:#f8fafc;
+    white-space:nowrap;
+  }
+  .sync-badge.saving{ color:#d97706; border-color:#fcd34d; background:#fffbeb; }
+  .sync-badge.saved{  color:#16a34a; border-color:#86efac; background:#f0fdf4; }
+  .sync-badge.error{  color:#dc2626; border-color:#fca5a5; background:#fff1f2; }
+.sync-badge.loading{ color:#2563eb; border-color:#93c5fd; background:#eff6ff; }
+.btn.toggle-active{
+  background:#0f766e;
+  border-color:#0f766e;
+  color:#fff;
+}
+  .notice-panel{
+    margin-bottom:14px;
+    padding:14px 16px;
+    border:1px solid #93c5fd;
+    border-radius:18px;
+    background:linear-gradient(180deg,#eff6ff 0%, #ffffff 100%);
+    box-shadow:var(--shadow);
+  }
+  .notice-panel-head{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:10px;
+    margin-bottom:10px;
+    flex-wrap:wrap;
+  }
+  .notice-panel-title{
+    font-size:15px;
+    font-weight:800;
+    color:#1e3a8a;
+  }
+  .notice-panel-meta{
+    font-size:12px;
+    color:#64748b;
+  }
+  .notice-list{
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    max-height:280px;
+    overflow:auto;
+    padding-right:4px;
+  }
+  .notice-item{
+    background:#fff;
+    border:1px solid #dbeafe;
+    border-radius:14px;
+    padding:10px 12px;
+  }
+  .notice-item-title{
+    font-size:13px;
+    font-weight:800;
+    color:#1f2937;
+    margin-bottom:4px;
+  }
+  .notice-item-meta{
+    font-size:12px;
+    color:#64748b;
+  }
+
+  /* 저장 버튼 미저장 상태 */
+  #explicitSaveBtn.unsaved{
+    background:#f59e0b;
+    border-color:#f59e0b;
+    color:#fff;
+    animation: pulse-save 1.8s ease-in-out infinite;
+  }
+  @keyframes pulse-save{
+    0%,100%{ opacity:1; }
+    50%{ opacity:.7; }
+  }
+
+  /* 옵션 드롭다운 */
+  .options-wrap{
+    position:relative;
+  }
+  .options-menu{
+    position:absolute;
+    top:calc(100% + 6px);
+    right:0;
+    min-width:180px;
+    background:#fff;
+    border:1px solid var(--line);
+    border-radius:14px;
+    box-shadow:0 8px 28px rgba(15,23,42,.13);
+    padding:6px;
+    z-index:900;
+    display:flex;
+    flex-direction:column;
+    gap:2px;
+  }
+  .options-item{
+    display:block;
+    width:100%;
+    text-align:left;
+    background:none;
+    border:none;
+    border-radius:9px;
+    padding:9px 12px;
+    font-size:13px;
+    font-weight:700;
+    color:var(--text);
+    cursor:pointer;
+    white-space:nowrap;
+  }
+  .options-item:hover{ background:#f1f5f9; }
+  .options-divider{
+    height:1px;
+    background:var(--line);
+    margin:4px 0;
+  }
   .role-badge.admin{
     color:var(--primary);
     border-color:#bfd4ff;
     background:var(--primary-soft);
+  }
+  .role-badge.viewer{
+    color:#0f766e;
+    border-color:#99f6e4;
+    background:#f0fdfa;
+  }
+  .save-warning-box{
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    padding:14px 16px;
+    border:1px solid #fde68a;
+    border-radius:16px;
+    background:#fffbeb;
+  }
+  .save-warning-title{
+    font-size:13px;
+    font-weight:800;
+    color:#92400e;
+  }
+  .save-warning-list{
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    margin:0;
+    padding-left:18px;
+    color:#78350f;
+    font-size:13px;
+  }
+  .save-warning-empty{
+    color:#166534;
+    font-size:13px;
+    font-weight:700;
+  }
+  .snapshot-layout{
+    display:grid;
+    grid-template-columns:minmax(220px, 280px) minmax(0, 1fr);
+    gap:16px;
+    align-items:start;
+  }
+  .snapshot-list{
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+  .snapshot-card{
+    width:100%;
+    text-align:left;
+    border:1px solid var(--line);
+    background:#fff;
+    border-radius:16px;
+    padding:12px 14px;
+    display:flex;
+    flex-direction:column;
+    gap:5px;
+    cursor:pointer;
+  }
+  .snapshot-card.active{
+    border-color:#93c5fd;
+    background:#eff6ff;
+    box-shadow:0 0 0 2px rgba(59,130,246,.12);
+  }
+  .snapshot-card-title{
+    font-size:13px;
+    font-weight:800;
+    color:#0f172a;
+  }
+  .snapshot-card-meta{
+    font-size:12px;
+    color:var(--muted);
+  }
+  .snapshot-preview{
+    border:1px solid var(--line);
+    border-radius:18px;
+    background:#fff;
+    padding:16px;
+    min-height:220px;
   }
 
   .legend{
@@ -250,6 +464,46 @@
 
   .dot{width:12px;height:12px;border-radius:4px}
   .calendar-wrap{overflow:auto}
+  .desktop-calendar{display:block}
+  .mobile-calendar{display:none}
+.mobile-day-card{
+    background:#fff;
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:12px;
+    box-shadow:var(--shadow);
+    position:relative;
+  }
+  .mobile-day-card.holiday{
+    background:linear-gradient(180deg,#fff7f8 0%,#ffffff 42%);
+    border-color:var(--holiday-border);
+  }
+  .mobile-day-card.subholiday{
+    background:linear-gradient(180deg,#fffaf3 0%,#ffffff 42%);
+    border-color:var(--subholiday-border);
+  }
+  .mobile-day-card.emp-work-highlight{
+    background:linear-gradient(180deg,var(--work-bg-start) 0%, var(--work-bg-end) 44%);
+    border-color:var(--work-border);
+    box-shadow:0 0 0 2px var(--work-outline), var(--shadow);
+  }
+  .mobile-day-card.emp-off-highlight{
+    background:linear-gradient(180deg,var(--off-bg-start) 0%, var(--off-bg-end) 44%);
+    border-color:var(--off-border);
+    box-shadow:0 0 0 2px var(--off-outline), var(--shadow);
+  }
+  .mobile-day-card.warn{
+    outline:2px solid rgba(220,38,38,.55);
+  }
+  .mobile-calendar .shift-block{
+    grid-template-columns:56px 1fr;
+  }
+  .mobile-calendar .slot-area{
+    min-height:34px;
+  }
+  .mobile-calendar .count-row{
+    margin-top:10px;
+  }
   .print-title{display:none}
 
   table.calendar{
@@ -302,9 +556,45 @@
     border-color:var(--subholiday-border);
   }
 
-  .day-cell.warn{
-    outline:2px solid rgba(220,38,38,.55);
-  }
+.day-cell.warn{
+  outline:2px solid rgba(220,38,38,.55);
+}
+.day-cell.wishoff-target,
+.mobile-day-card.wishoff-target{
+  cursor:pointer;
+}
+.day-cell.wishoff-target::after,
+.mobile-day-card.wishoff-target::after{
+  content:'희망휴무';
+  position:absolute;
+  right:10px;
+  bottom:10px;
+  font-size:11px;
+  font-weight:800;
+  padding:4px 8px;
+  border-radius:999px;
+  background:#ecfeff;
+  color:#0f766e;
+  border:1px solid #99f6e4;
+}
+.day-cell.wishoff-selected,
+.mobile-day-card.wishoff-selected{
+  box-shadow:0 0 0 2px #f59e0b, var(--shadow);
+}
+.day-cell.wishoff-selected::after,
+.mobile-day-card.wishoff-selected::after{
+  content:'희망휴무 신청됨';
+  position:absolute;
+  right:10px;
+  bottom:10px;
+  font-size:11px;
+  font-weight:800;
+  padding:4px 8px;
+  border-radius:999px;
+  background:#fff7ed;
+  color:#b45309;
+  border:1px solid #fdba74;
+}
 
   .day-head{
     display:flex;
@@ -718,6 +1008,40 @@
     min-width:0;
   }
 
+  @media (max-width: 768px){
+    .toolbar{
+      flex-wrap:wrap;
+    }
+    .filter-box.viewer-only{
+      width:100%;
+      flex-wrap:wrap;
+    }
+    .filter-controls{
+      flex-wrap:wrap;
+      white-space:normal;
+      width:100%;
+    }
+    .filter-controls .filter-box{
+      width:100%;
+      flex-wrap:wrap;
+    }
+    .filter-box select{
+      width:100%;
+      min-width:0;
+      max-width:none;
+      flex:1;
+    }
+    .filter-status{
+      width:auto;
+      min-width:0;
+      max-width:none;
+    }
+    .color-picker-group,
+    .preset-group{
+      flex-wrap:nowrap;
+    }
+  }
+
   .color-picker-group{
     display:flex;
     align-items:center;
@@ -934,6 +1258,14 @@
       padding:0 !important;
     }
 
+    .mobile-calendar{
+      display:none !important;
+    }
+
+    .desktop-calendar{
+      display:block !important;
+    }
+
     table.calendar{
       width:100% !important;
       min-width:0 !important;
@@ -1143,9 +1475,11 @@
     }
 
     .shift-row-off .slot-area{
-      height:5.1mm !important;
+      height:auto !important;
       min-height:5.1mm !important;
-      max-height:5.1mm !important;
+      max-height:none !important;
+      overflow:visible !important;
+      align-content:flex-start !important;
     }
 
     .person-chip,
@@ -1492,6 +1826,83 @@
 .toolbar .btn,
 .toolbar select{
   height:32px;
+}
+
+
+@media (max-width: 900px){
+  .app{
+    padding:12px;
+  }
+
+  .topbar{
+    align-items:stretch;
+  }
+
+  .title-area{
+    width:100%;
+    justify-content:space-between;
+  }
+
+  .month-nav{
+    flex:1 1 100%;
+    justify-content:space-between;
+  }
+
+  .month-label{
+    min-width:0;
+    flex:1;
+  }
+
+  .toolbar{
+    width:100%;
+    overflow:visible;
+    white-space:normal;
+    gap:10px;
+  }
+
+  .toolbar > *{
+    min-width:0;
+  }
+
+  .toolbar .group{
+    width:100%;
+  }
+
+  .toolbar .group .btn,
+  .toolbar .group .options-wrap,
+  .toolbar > .btn,
+  .toolbar > .options-wrap{
+    flex:1 1 calc(50% - 6px);
+  }
+
+  .toolbar .group .btn,
+  .toolbar > .btn{
+    width:100%;
+  }
+
+  .options-wrap .btn{
+    width:100%;
+  }
+
+  .sync-badge,
+  .role-badge,
+  .meta-badge{
+    width:fit-content;
+  }
+
+  .snapshot-layout{
+    grid-template-columns:1fr;
+  }
+
+  .desktop-calendar{
+    display:none;
+  }
+
+  .mobile-calendar{
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+  }
 }
 
 
