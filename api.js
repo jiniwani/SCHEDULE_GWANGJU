@@ -17,6 +17,7 @@
 const STATE_KEY = 'schedulerState';
 const CHANGELOG_KEY = 'schedulerChangelog';
 const PW_HASH_KEY = 'schedulerAdminPwHash';
+const RECOVERY_HASH_KEY = 'schedulerAdminRecoveryHash';
 const SESSION_VERSION_KEY = 'schedulerSessionVersion';
 const SESSION_PREFIX = 'schedulerAdminSession:';
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
@@ -27,6 +28,8 @@ const SNAPSHOT_LIMIT = 3;
 
 // 최초 기본 비밀번호 '1234' 의 SHA-256
 const DEFAULT_HASH = '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4';
+// 최초 기본 복구코드 'reset1234' 의 SHA-256
+const DEFAULT_RECOVERY_HASH = '41963f0d8ff4ff516d17df3f4d40e2683955f1c632dda298c4a39edb4f8090dd';
 
 function cors(res) {
   res.headers.set('Access-Control-Allow-Origin', '*');
@@ -50,6 +53,11 @@ async function sha256Hex(value) {
 async function getStoredHash(env) {
   const hash = await env.SCHEDULER_KV.get(PW_HASH_KEY, KV_READ_OPTIONS);
   return hash || DEFAULT_HASH;
+}
+
+async function getStoredRecoveryHash(env) {
+  const hash = await env.SCHEDULER_KV.get(RECOVERY_HASH_KEY, KV_READ_OPTIONS);
+  return hash || DEFAULT_RECOVERY_HASH;
 }
 
 function shouldBypassKvCache(request) {
@@ -130,6 +138,12 @@ async function getSessionVersion(env) {
   const raw = await env.SCHEDULER_KV.get(SESSION_VERSION_KEY, KV_READ_OPTIONS);
   const parsed = Number(raw || '1');
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
+async function invalidateAllSessions(env) {
+  const nextVersion = (await getSessionVersion(env)) + 1;
+  await env.SCHEDULER_KV.put(SESSION_VERSION_KEY, String(nextVersion));
+  return nextVersion;
 }
 
 function readBearerToken(request) {
@@ -396,9 +410,59 @@ async function handleChangePassword(request, env) {
 
   const newHash = await sha256Hex(newPassword);
   await env.SCHEDULER_KV.put(PW_HASH_KEY, newHash);
+  await invalidateAllSessions(env);
 
-  const nextVersion = (await getSessionVersion(env)) + 1;
-  await env.SCHEDULER_KV.put(SESSION_VERSION_KEY, String(nextVersion));
+  return cors(json({ ok: true }));
+}
+
+async function handleRecoverPassword(request, env) {
+  const body = await readJson(request);
+  if (!body) return cors(json({ error: '잘못된 JSON' }, 400));
+
+  const recoveryCode = String(body.recoveryCode || '');
+  const newPassword = String(body.newPassword || '');
+  if (!recoveryCode) return cors(json({ error: '복구코드를 입력해줘.' }, 400));
+  if (!newPassword || newPassword.length < 4) {
+    return cors(json({ error: '새 비밀번호는 4자 이상이어야 해.' }, 400));
+  }
+
+  const storedRecoveryHash = await getStoredRecoveryHash(env);
+  const recoveryHash = await sha256Hex(recoveryCode);
+  if (recoveryHash !== storedRecoveryHash) {
+    return cors(json({ error: '복구코드가 일치하지 않아.' }, 403));
+  }
+
+  const newHash = await sha256Hex(newPassword);
+  await env.SCHEDULER_KV.put(PW_HASH_KEY, newHash);
+  await invalidateAllSessions(env);
+
+  return cors(json({ ok: true }));
+}
+
+async function handleChangeRecoveryCode(request, env) {
+  const body = await readJson(request);
+  if (!body) return cors(json({ error: '잘못된 JSON' }, 400));
+
+  const session = await getAdminSession(env, request, body.adminToken);
+  if (!session) {
+    return cors(json({ error: '관리자 인증이 만료됐어. 다시 로그인해줘.' }, 403));
+  }
+
+  const currentRecoveryCode = String(body.currentRecoveryCode || '');
+  const newRecoveryCode = String(body.newRecoveryCode || '');
+  if (!currentRecoveryCode) return cors(json({ error: '현재 복구코드를 입력해줘.' }, 400));
+  if (!newRecoveryCode || newRecoveryCode.length < 4) {
+    return cors(json({ error: '새 복구코드는 4자 이상이어야 해.' }, 400));
+  }
+
+  const storedRecoveryHash = await getStoredRecoveryHash(env);
+  const currentRecoveryHash = await sha256Hex(currentRecoveryCode);
+  if (currentRecoveryHash !== storedRecoveryHash) {
+    return cors(json({ error: '현재 복구코드가 틀렸어.' }, 403));
+  }
+
+  const newRecoveryHash = await sha256Hex(newRecoveryCode);
+  await env.SCHEDULER_KV.put(RECOVERY_HASH_KEY, newRecoveryHash);
 
   return cors(json({ ok: true }));
 }
@@ -563,6 +627,14 @@ export async function onRequest(context) {
   }
   if (path.startsWith('/api/change-password')) {
     if (method === 'POST') return handleChangePassword(request, env);
+    return cors(json({ error: 'Method Not Allowed' }, 405));
+  }
+  if (path.startsWith('/api/recover-password')) {
+    if (method === 'POST') return handleRecoverPassword(request, env);
+    return cors(json({ error: 'Method Not Allowed' }, 405));
+  }
+  if (path.startsWith('/api/change-recovery-code')) {
+    if (method === 'POST') return handleChangeRecoveryCode(request, env);
     return cors(json({ error: 'Method Not Allowed' }, 405));
   }
   if (path.startsWith('/api/restore-snapshot')) {

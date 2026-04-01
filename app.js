@@ -1047,11 +1047,31 @@
     return `onclick="handleViewerWishOffClick('${dateKey}')" title="희망휴무 신청/해제"`;
   }
 
+  function shouldUseNativeMobilePrint(){
+    const ua = navigator.userAgent || '';
+    const mobileUa = /Android|iPhone|iPad|iPod|Mobile|SamsungBrowser/i.test(ua);
+    const touchDevice = navigator.maxTouchPoints > 0;
+    const narrowViewport = window.innerWidth <= 1024;
+    return mobileUa || (touchDevice && narrowViewport);
+  }
+
   function triggerPrint(){
     const view = document.getElementById('view-calendar');
     const stylesheet = document.querySelector('link[rel="stylesheet"]');
     if(!view || !stylesheet){
       alert('인쇄할 화면을 아직 준비하지 못했어. 잠시 후 다시 시도해줘.');
+      return;
+    }
+
+    if(shouldUseNativeMobilePrint() && typeof window.print === 'function'){
+      const prevTab = state.activeTab;
+      state.activeTab = 'calendar';
+      renderAll();
+      setTimeout(() => {
+        window.print();
+        state.activeTab = prevTab;
+        renderAll();
+      }, 180);
       return;
     }
 
@@ -1695,6 +1715,7 @@
 
       <div class="modal-actions">
         <button class="btn" onclick="closeModal()">취소</button>
+        <button class="btn" onclick="openRecoverPasswordModal()">비밀번호 복원</button>
         <button class="btn primary" onclick="submitAdminLogin()">로그인</button>
       </div>
     `);
@@ -1729,7 +1750,151 @@
     }
   }
 
+  function openRecoverPasswordModal(){
+    openModal(`
+      <div class="modal-head">
+        <div class="modal-title">비밀번호 복원</div>
+        <button class="btn" onclick="closeModal()">닫기</button>
+      </div>
+
+      <div class="form-row" style="flex-direction:column;gap:12px;">
+        <div class="field" style="min-width:280px">
+          <label>복구코드</label>
+          <input id="recoverCodeInput" type="password" placeholder="복구코드" />
+        </div>
+        <div class="field" style="min-width:280px">
+          <label>새 비밀번호</label>
+          <input id="recoverPwNew" type="password" placeholder="새 비밀번호" />
+        </div>
+        <div class="field" style="min-width:280px">
+          <label>새 비밀번호 확인</label>
+          <input id="recoverPwConfirm" type="password" placeholder="새 비밀번호 다시 입력"
+            onkeydown="if(event.key==='Enter') submitRecoverPassword()" />
+        </div>
+      </div>
+
+      <div class="muted" style="margin-top:8px;font-size:12px;">초기 복구코드는 <strong>reset1234</strong> 이고, 로그인 후 설정에서 바꾸는 걸 추천해.</div>
+      <div id="recoverPwMsg" style="font-size:13px;margin-top:8px;min-height:20px;"></div>
+
+      <div class="modal-actions">
+        <button class="btn" onclick="handleAdminAuth()">로그인으로 돌아가기</button>
+        <button class="btn primary" onclick="submitRecoverPassword()">비밀번호 재설정</button>
+      </div>
+    `);
+  }
+
+  async function submitRecoverPassword(){
+    const recoveryCode = document.getElementById('recoverCodeInput')?.value || '';
+    const newPassword = document.getElementById('recoverPwNew')?.value || '';
+    const confirmPassword = document.getElementById('recoverPwConfirm')?.value || '';
+    const msgEl = document.getElementById('recoverPwMsg');
+
+    if(!recoveryCode){ msgEl.textContent = '복구코드를 입력해줘.'; msgEl.style.color='#dc2626'; return; }
+    if(!newPassword || newPassword.length < 4){ msgEl.textContent = '새 비밀번호는 4자 이상이어야 해.'; msgEl.style.color='#dc2626'; return; }
+    if(newPassword !== confirmPassword){ msgEl.textContent = '새 비밀번호가 일치하지 않아.'; msgEl.style.color='#dc2626'; return; }
+
+    msgEl.textContent = '재설정 중…';
+    msgEl.style.color = '#2563eb';
+
+    try{
+      const res = await fetch('/api/recover-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recoveryCode,
+          newPassword
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok){
+        msgEl.textContent = data.error || '복원 실패';
+        msgEl.style.color = '#dc2626';
+        return;
+      }
+      clearAdminSession();
+      state.isAdmin = false;
+      saveState();
+      msgEl.textContent = '비밀번호를 재설정했어. 새 비밀번호로 다시 로그인해줘.';
+      msgEl.style.color = '#16a34a';
+      setTimeout(() => handleAdminAuth(), 800);
+    }catch(e){
+      msgEl.textContent = '서버 오류. 다시 시도해줘.';
+      msgEl.style.color = '#dc2626';
+    }
+  }
+
   // ── 비밀번호 변경 모달 ──────────────────────────────────────
+  function openChangeRecoveryCodeModal(){
+    if(!requireAdmin()) return;
+    openModal(`
+      <div class="modal-head">
+        <div class="modal-title">복구코드 변경</div>
+        <button class="btn" onclick="closeModal()">닫기</button>
+      </div>
+
+      <div class="form-row" style="flex-direction:column;gap:12px;">
+        <div class="field" style="min-width:280px">
+          <label>현재 복구코드</label>
+          <input id="recoveryCurrent" type="password" placeholder="현재 복구코드" />
+        </div>
+        <div class="field" style="min-width:280px">
+          <label>새 복구코드</label>
+          <input id="recoveryNew" type="password" placeholder="새 복구코드" />
+        </div>
+        <div class="field" style="min-width:280px">
+          <label>새 복구코드 확인</label>
+          <input id="recoveryConfirm" type="password" placeholder="새 복구코드 다시 입력"
+            onkeydown="if(event.key==='Enter') submitChangeRecoveryCode()" />
+        </div>
+      </div>
+
+      <div id="recoveryChangeMsg" style="font-size:13px;margin-top:8px;min-height:20px;"></div>
+
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">취소</button>
+        <button class="btn primary" onclick="submitChangeRecoveryCode()">변경</button>
+      </div>
+    `);
+  }
+
+  async function submitChangeRecoveryCode(){
+    const currentVal = document.getElementById('recoveryCurrent')?.value || '';
+    const newVal = document.getElementById('recoveryNew')?.value || '';
+    const confirmVal = document.getElementById('recoveryConfirm')?.value || '';
+    const msgEl = document.getElementById('recoveryChangeMsg');
+
+    if(!currentVal){ msgEl.textContent = '현재 복구코드를 입력해줘.'; msgEl.style.color='#dc2626'; return; }
+    if(!newVal || newVal.length < 4){ msgEl.textContent = '새 복구코드는 4자 이상이어야 해.'; msgEl.style.color='#dc2626'; return; }
+    if(newVal !== confirmVal){ msgEl.textContent = '새 복구코드가 일치하지 않아.'; msgEl.style.color='#dc2626'; return; }
+
+    msgEl.textContent = '변경 중…';
+    msgEl.style.color = '#2563eb';
+
+    try{
+      const res = await fetch('/api/change-recovery-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminToken: getAdminToken(),
+          currentRecoveryCode: currentVal,
+          newRecoveryCode: newVal
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok){
+        msgEl.textContent = data.error || '변경 실패';
+        msgEl.style.color = '#dc2626';
+        return;
+      }
+      msgEl.textContent = '복구코드를 변경했어.';
+      msgEl.style.color = '#16a34a';
+      setTimeout(() => closeModal(), 1000);
+    }catch(e){
+      msgEl.textContent = '서버 오류. 다시 시도해줘.';
+      msgEl.style.color = '#dc2626';
+    }
+  }
+
   // ── 저장 모달 (변경 메모 입력 후 KV 전송) ──────────────────
   function openSaveModal(){
     if(!requireAdmin()) return;
