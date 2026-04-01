@@ -245,9 +245,10 @@
   async function explicitSave(changeNote, noticeContent = ''){
     if(!isAdmin()) return;
     showSyncStatus('saving');
-    try{
+      try{
       const { isAdmin: _a, ...payload } = state;
-      const res = await fetch('/api/state', {
+      delete payload.memoOpen;
+        const res = await fetch('/api/state', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -578,13 +579,14 @@
     try{
       const url = forceFresh ? '/api/state?fresh=1' : '/api/state';
       const res = await fetch(url);
-      if(res.ok){
-        const parsed = await res.json();
-        const { isAdmin: _ignoredIsAdmin, ...safeParsed } = parsed;
-        state = { ...state, ...safeParsed };
-        if(!Array.isArray(state.notices)) state.notices = [];
-        if(!Array.isArray(state.snapshots)) state.snapshots = [];
-        state._revision = Number(state._revision || 0);
+        if(res.ok){
+          const parsed = await res.json();
+          const { isAdmin: _ignoredIsAdmin, ...safeParsed } = parsed;
+          state = { ...state, ...safeParsed };
+          state.memoOpen = false;
+          if(!Array.isArray(state.notices)) state.notices = [];
+          if(!Array.isArray(state.snapshots)) state.snapshots = [];
+          state._revision = Number(state._revision || 0);
         showSyncStatus('loaded');
       } else {
         showSyncStatus('error');
@@ -1529,6 +1531,7 @@
         }
         const { isAdmin: _ignoredIsAdmin, ...safeState } = data.state || {};
         state = { ...state, ...safeState };
+        state.memoOpen = false;
         if(!Array.isArray(state.notices)) state.notices = [];
         state._revision = Number(state._revision || 0);
       }
@@ -1577,11 +1580,10 @@
   }
 
   function toggleMemoPanel(){
-    if(!requireAdmin()) return;
-    state.memoOpen = !state.memoOpen;
-    saveState();
-    renderMemos();
-  }
+      if(!requireAdmin()) return;
+      state.memoOpen = !state.memoOpen;
+      renderMemos();
+    }
 
   function escapeHtml(str){
     return String(str)
@@ -2087,6 +2089,7 @@
       const restored = data.state || {};
       const { isAdmin: _ignoredIsAdmin, ...safeRestored } = restored;
       state = { ...state, ...safeRestored };
+      state.memoOpen = false;
       if(!Array.isArray(state.notices)) state.notices = [];
       if(!Array.isArray(state.snapshots)) state.snapshots = [];
       state._revision = Number(data.revision || state._revision || 0);
