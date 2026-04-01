@@ -303,7 +303,7 @@
   }
 
   function canUseReportTools(){
-    return isAdmin();
+    return !!state.isAdmin;
   }
 
   async function deleteNotice(noticeId){
@@ -388,7 +388,7 @@
 
     panel.classList.remove('hidden');
     meta.textContent = `누적 공지 ${notices.length}건`;
-    const reportButton = canUseReportTools() ? `
+    const reportButton = state.isAdmin ? `
       <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">
         <button class="btn small" type="button" onclick="openReportModal()">보고문 만들기</button>
       </div>
@@ -532,7 +532,7 @@
   }
 
   function openReportModal(){
-    if(!canUseReportTools()) return;
+    if(!state.isAdmin) return;
     const template = buildReportTemplate();
     openModal(`
       <div class="modal-head">
@@ -1879,30 +1879,6 @@
     }
   }
 
-  // ── 옵션 드롭다운 토글 ────────────────────────────────────────
-  function toggleOptionsMenu(){
-    const menu = document.getElementById('optionsMenu');
-    if(!menu) return;
-    menu.classList.toggle('hidden');
-  }
-
-  // 옵션 메뉴 외부 클릭 시 닫기
-  document.addEventListener('click', (e)=>{
-    const wrap = document.getElementById('optionsWrap');
-    const menu = document.getElementById('optionsMenu');
-    if(menu && wrap && !wrap.contains(e.target)){
-      menu.classList.add('hidden');
-    }
-  });
-
-  // 옵션 항목 클릭 후 메뉴 닫기 (해당 항목이 모달을 열면 자동으로 닫힘)
-  document.addEventListener('click', (e)=>{
-    if(e.target.classList.contains('options-item')){
-      const menu = document.getElementById('optionsMenu');
-      if(menu) menu.classList.add('hidden');
-    }
-  });
-
   function openChangePasswordModal(){
     if(!requireAdmin()) return;
     openModal(`
@@ -2432,7 +2408,7 @@
       knownLatestChangeId = logs[0]?.id ?? knownLatestChangeId;
       renderNoticePanel();
       if(badge){ badge.style.display='none'; }
-      const reportButton = canUseReportTools() ? `
+      const reportButton = state.isAdmin ? `
         <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">
           <button class="btn small" type="button" onclick="openReportModal()">보고문 만들기</button>
         </div>
