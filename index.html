@@ -58,19 +58,7 @@
           <div class="group admin-only">
             <button class="btn" onclick="toggleMemoPanel()" id="memoToggleBtn">메모장 열기</button>
             <button class="btn primary unsaved-save" id="explicitSaveBtn" onclick="openSaveModal()">저장</button>
-            <div class="options-wrap" id="optionsWrap">
-              <button class="btn" onclick="toggleOptionsMenu()" id="optionsBtn">⚙️ 옵션</button>
-              <div class="options-menu hidden" id="optionsMenu">
-                <button class="options-item" onclick="toggleEarlyShiftRow()" id="earlyShiftToggleBtn">조출줄 켜기</button>
-                <button class="options-item" onclick="toggleNightShiftRow()" id="nightShiftToggleBtn">야간줄 끄기</button>
-                <div class="options-divider"></div>
-                <button class="options-item" onclick="openSlotConfigModal()">슬롯 설정</button>
-                <button class="options-item" onclick="resetCurrentMonth()">현재 월 초기화</button>
-                <button class="options-item" onclick="openRestoreManager()">복원 관리</button>
-                <div class="options-divider"></div>
-                <button class="options-item" onclick="openChangePasswordModal()">🔑 비밀번호 변경</button>
-              </div>
-            </div>
+            <button class="btn" onclick="showTab('settings')" id="optionsBtn">⚙️ 설정</button>
             <button class="btn" onclick="triggerPrint()">인쇄</button>
           </div>
 
@@ -84,6 +72,7 @@
         <button class="tab admin-only" data-tab="employees" onclick="showTab('employees')">직원 관리</button>
         <button class="tab admin-only" data-tab="holiday" onclick="showTab('holiday')">공휴일 · 대체휴무일</button>
         <button class="tab admin-only" data-tab="stats" onclick="showTab('stats')">통계</button>
+        <button class="tab admin-only" data-tab="settings" onclick="showTab('settings')">설정</button>
         <button class="tab" data-tab="changelog" onclick="showTab('changelog')">변경이력</button>
       </div>
 
@@ -176,6 +165,45 @@
 
       <div id="view-stats" class="panel hidden admin-only">
         <div id="statsWrap"></div>
+      </div>
+
+      <div id="view-settings" class="panel hidden admin-only">
+        <div class="settings-grid">
+          <section class="settings-card">
+            <div class="settings-card-title">표시 설정</div>
+            <div class="settings-card-desc">자주 쓰는 줄 표시를 여기서 바로 켜고 끌 수 있어.</div>
+            <div class="settings-actions">
+              <button class="btn" id="earlyShiftToggleBtn" onclick="toggleEarlyShiftRow()">조출줄 켜기</button>
+              <button class="btn" id="nightShiftToggleBtn" onclick="toggleNightShiftRow()">야간줄 끄기</button>
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <div class="settings-card-title">근무표 편집</div>
+            <div class="settings-card-desc">슬롯 수나 현재 월 기본값을 빠르게 정리할 때 써.</div>
+            <div class="settings-actions">
+              <button class="btn" onclick="openSlotConfigModal()">슬롯 설정</button>
+              <button class="btn" onclick="resetCurrentMonth()">현재 월 초기화</button>
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <div class="settings-card-title">복원 · 기록</div>
+            <div class="settings-card-desc">최근 저장본 복원이나 기록 정리가 필요할 때 사용해.</div>
+            <div class="settings-actions">
+              <button class="btn" onclick="openRestoreManager()">복원 관리</button>
+              <button class="btn" onclick="showTab('changelog')">변경이력 보기</button>
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <div class="settings-card-title">관리자 보안</div>
+            <div class="settings-card-desc">비밀번호 변경 같은 관리자 전용 설정이야.</div>
+            <div class="settings-actions">
+              <button class="btn" onclick="openChangePasswordModal()">비밀번호 변경</button>
+            </div>
+          </section>
+        </div>
       </div>
 
       <div id="view-changelog" class="panel hidden">

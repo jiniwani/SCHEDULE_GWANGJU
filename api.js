@@ -300,6 +300,76 @@ async function handleGetChangelog(request, env) {
   }));
 }
 
+async function handleDeleteNotice(request, env) {
+  const body = await readJson(request);
+  if (!body) return cors(json({ error: '잘못된 JSON' }, 400));
+
+  const session = await getAdminSession(env, request, body.adminToken);
+  if (!session) {
+    return cors(json({ error: '관리자 인증이 만료됐어. 다시 로그인해줘.' }, 403));
+  }
+
+  const currentState = await getLatestStoredState(env);
+  const currentRevision = Number(currentState._revision || 0);
+  const baseRevision = Number(body.baseRevision || 0);
+  if (baseRevision !== currentRevision) {
+    return cors(json({
+      error: '다른 사용자가 먼저 변경했습니다. 새로고침 후 다시 시도하세요.',
+      currentRevision,
+      currentTimestamp: currentState._lastSavedAt || ''
+    }, 409));
+  }
+
+  const noticeId = Number(body.noticeId || 0);
+  const nextNotices = Array.isArray(currentState.notices)
+    ? currentState.notices.filter(item => Number(item.id) !== noticeId)
+    : [];
+
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const timestamp = kst.toISOString().replace('T', ' ').slice(0, 16) + ' (KST)';
+  const nextRevision = currentRevision + 1;
+
+  const nextState = normalizeStatePayload({
+    ...currentState,
+    notices: nextNotices,
+    _revision: nextRevision,
+    _lastSavedAt: timestamp
+  });
+
+  await env.SCHEDULER_KV.put(STATE_KEY, JSON.stringify(nextState));
+
+  return cors(json({
+    ok: true,
+    notices: nextState.notices,
+    revision: nextRevision,
+    timestamp
+  }));
+}
+
+async function handleDeleteChangelog(request, env) {
+  const body = await readJson(request);
+  if (!body) return cors(json({ error: '잘못된 JSON' }, 400));
+
+  const session = await getAdminSession(env, request, body.adminToken);
+  if (!session) {
+    return cors(json({ error: '관리자 인증이 만료됐어. 다시 로그인해줘.' }, 403));
+  }
+
+  const logId = Number(body.logId || 0);
+  const raw = await env.SCHEDULER_KV.get(CHANGELOG_KEY, KV_READ_OPTIONS);
+  const logs = raw ? JSON.parse(raw) : [];
+  const nextLogs = Array.isArray(logs)
+    ? logs.filter(item => Number(item.id) !== logId)
+    : [];
+
+  await env.SCHEDULER_KV.put(CHANGELOG_KEY, JSON.stringify(nextLogs));
+
+  return cors(json({
+    ok: true,
+    logs: nextLogs
+  }));
+}
+
 async function handleChangePassword(request, env) {
   const body = await readJson(request);
   if (!body) return cors(json({ error: '잘못된 JSON' }, 400));
@@ -505,6 +575,14 @@ export async function onRequest(context) {
   }
   if (path.startsWith('/api/changelog')) {
     if (method === 'GET') return handleGetChangelog(request, env);
+    return cors(json({ error: 'Method Not Allowed' }, 405));
+  }
+  if (path.startsWith('/api/delete-notice')) {
+    if (method === 'POST') return handleDeleteNotice(request, env);
+    return cors(json({ error: 'Method Not Allowed' }, 405));
+  }
+  if (path.startsWith('/api/delete-changelog')) {
+    if (method === 'POST') return handleDeleteChangelog(request, env);
     return cors(json({ error: 'Method Not Allowed' }, 405));
   }
   if (path.startsWith('/api/state')) {

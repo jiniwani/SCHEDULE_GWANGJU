@@ -306,6 +306,72 @@
     return isAdmin();
   }
 
+  async function deleteNotice(noticeId){
+    if(!isAdmin()) return;
+    if(!confirm('이 공지를 삭제할까?')) return;
+    showSyncStatus('saving');
+    try{
+      const res = await fetch('/api/delete-notice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminToken: getAdminToken(),
+          noticeId: Number(noticeId),
+          baseRevision: Number(state._revision || 0)
+        })
+      });
+      const data = await res.json();
+      if(res.status === 403){
+        clearAdminSession();
+        renderAll();
+        throw new Error(data.error || 'admin session expired');
+      }
+      if(res.status === 409){
+        throw new Error(data.error || 'delete conflict');
+      }
+      if(!res.ok) throw new Error(data.error || 'notice delete failed');
+      state.notices = Array.isArray(data.notices) ? data.notices : [];
+      state._revision = Number(data.revision || state._revision || 0);
+      state._lastSavedAt = data.timestamp || state._lastSavedAt || '';
+      renderAll();
+      showSyncStatus('saved');
+    }catch(e){
+      showSyncStatus('error');
+      alert(e.message || '공지 삭제에 실패했어.');
+    }
+  }
+
+  async function deleteChangelog(logId){
+    if(!isAdmin()) return;
+    if(!confirm('이 변경이력을 삭제할까?')) return;
+    showSyncStatus('saving');
+    try{
+      const res = await fetch('/api/delete-changelog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminToken: getAdminToken(),
+          logId: Number(logId)
+        })
+      });
+      const data = await res.json();
+      if(res.status === 403){
+        clearAdminSession();
+        renderAll();
+        throw new Error(data.error || 'admin session expired');
+      }
+      if(!res.ok) throw new Error(data.error || 'changelog delete failed');
+      changelogCache = Array.isArray(data.logs) ? data.logs : [];
+      knownLatestChangeId = changelogCache[0]?.id ?? null;
+      renderNoticePanel();
+      await loadChangelog(true);
+      showSyncStatus('saved');
+    }catch(e){
+      showSyncStatus('error');
+      alert(e.message || '변경이력 삭제에 실패했어.');
+    }
+  }
+
   function renderNoticePanel(){
     const panel = document.getElementById('noticePanel');
     const list = document.getElementById('noticeList');
@@ -329,7 +395,10 @@
     ` : '';
     list.innerHTML = reportButton + notices.map(notice => `
       <div class="notice-item">
-        <div class="notice-item-title">${escHtml(notice.message || '공지')}</div>
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+          <div class="notice-item-title">${escHtml(notice.message || '공지')}</div>
+          ${isAdmin() ? `<button class="btn small" type="button" onclick="deleteNotice(${Number(notice.id)})">삭제</button>` : ''}
+        </div>
         <div class="notice-item-meta">${escHtml(notice.timestamp || '')} · ${notice.year}년 ${notice.month}월</div>
       </div>
     `).join('');
@@ -426,26 +495,21 @@
 
     if(targetLogs.length){
       const latest = targetLogs[0];
-      lines.push(`기준시각: ${latest.timestamp || '-'}`);
+      const baseDate = String(latest.timestamp || '').split(' ')[0] || '-';
+      lines.push(`기준시각: ${baseDate}`);
       lines.push('');
-      lines.push('변경이력:');
+      lines.push('변경내용');
       targetLogs.forEach((log, idx) => {
         lines.push(`${idx + 1}. ${log.note || '근무표 수정'} (${log.timestamp || '-'})`);
       });
     } else {
       lines.push('기준시각: -');
       lines.push('');
-      lines.push('변경이력:');
+      lines.push('변경내용');
       lines.push('- 아직 불러온 변경이력이 없습니다.');
     }
-
-    if(Array.isArray(state.notices) && state.notices.length){
-      lines.push('');
-      lines.push('공지:');
-      state.notices.slice(0, 3).forEach((notice, idx) => {
-        lines.push(`${idx + 1}. ${notice.message || '공지'} (${notice.timestamp || '-'})`);
-      });
-    }
+    lines.push('');
+    lines.push('위와 같이 근무표 변경 되었습니다.');
 
     return lines.join('\n');
   }
@@ -1058,8 +1122,10 @@
           <td>${emp.name}</td>
           <td>${emp.role}</td>
           <td>
+            <div class="table-actions-inline">
             <button class="btn" onclick="openEmployeeModal(${emp.id})">수정</button>
             <button class="btn danger" onclick="deleteEmployee(${emp.id})">삭제</button>
+            </div>
           </td>
         </tr>
       `;
@@ -1593,6 +1659,7 @@
     document.getElementById('view-employees').classList.toggle('hidden', !isAdmin() || state.activeTab !== 'employees');
     document.getElementById('view-holiday').classList.toggle('hidden', !isAdmin() || state.activeTab !== 'holiday');
     document.getElementById('view-stats').classList.toggle('hidden', !isAdmin() || state.activeTab !== 'stats');
+    document.getElementById('view-settings').classList.toggle('hidden', !isAdmin() || state.activeTab !== 'settings');
     document.getElementById('view-changelog').classList.toggle('hidden', state.activeTab !== 'changelog');
   }
 
@@ -2379,7 +2446,10 @@
       el.innerHTML = reportButton + logs.map(log => `
         <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:#fff;border:1px solid var(--line);border-radius:12px;">
           <div style="flex:1;min-width:0;">
-            <div style="font-size:13px;font-weight:800;margin-bottom:3px;">${escHtml(log.note)}</div>
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:3px;">
+              <div style="font-size:13px;font-weight:800;">${escHtml(log.note)}</div>
+              ${isAdmin() ? `<button class="btn small" type="button" onclick="deleteChangelog(${Number(log.id)})">삭제</button>` : ''}
+            </div>
             <div style="font-size:12px;color:var(--muted);">${escHtml(log.timestamp)} · ${log.year}년 ${log.month}월</div>
           </div>
         </div>

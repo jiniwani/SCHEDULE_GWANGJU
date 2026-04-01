@@ -884,6 +884,36 @@
     grid-template-columns:1fr 1fr;
     gap:14px;
   }
+  .settings-grid{
+    display:grid;
+    grid-template-columns:repeat(2, minmax(0, 1fr));
+    gap:14px;
+  }
+  .settings-card{
+    background:#fff;
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:16px;
+    box-shadow:var(--shadow);
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+  }
+  .settings-card-title{
+    font-size:16px;
+    font-weight:800;
+    color:#0f172a;
+  }
+  .settings-card-desc{
+    font-size:13px;
+    color:var(--muted);
+    line-height:1.6;
+  }
+  .settings-actions{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+  }
 
   .form-row{
     display:flex;
@@ -929,14 +959,25 @@
   table.basic th,
   table.basic td{
     border-bottom:1px solid #e8edf4;
-    padding:10px 8px;
+    padding:8px 8px;
     text-align:left;
     font-size:14px;
+    vertical-align:middle;
   }
 
   table.basic th{
     color:var(--muted);
     background:#fafcff;
+  }
+  .table-actions-inline{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    flex-wrap:nowrap;
+  }
+  .table-actions-inline .btn{
+    min-width:56px;
+    padding:6px 10px;
   }
 
   .tag-box{
@@ -2009,6 +2050,9 @@
     grid-template-columns:1fr;
   }
   .wishoff-helper-grid{
+    grid-template-columns:1fr;
+  }
+  .settings-grid{
     grid-template-columns:1fr;
   }
 
