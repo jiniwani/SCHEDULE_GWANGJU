@@ -52,6 +52,7 @@
     activeTab: 'calendar',
     selectedEmployeeId: null,
     viewerWishOffMode: false,
+    viewerWishOffDrafts: {},
     isAdmin: false,
     highlightColors: {
       work: '#dbeafe',
@@ -301,6 +302,10 @@
     if(btn){ btn.classList.remove('unsaved'); btn.textContent = '저장'; }
   }
 
+  function canUseReportTools(){
+    return isAdmin();
+  }
+
   function renderNoticePanel(){
     const panel = document.getElementById('noticePanel');
     const list = document.getElementById('noticeList');
@@ -317,11 +322,12 @@
 
     panel.classList.remove('hidden');
     meta.textContent = `누적 공지 ${notices.length}건`;
-    list.innerHTML = `
+    const reportButton = canUseReportTools() ? `
       <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">
         <button class="btn small" type="button" onclick="openReportModal()">보고문 만들기</button>
       </div>
-    ` + notices.map(notice => `
+    ` : '';
+    list.innerHTML = reportButton + notices.map(notice => `
       <div class="notice-item">
         <div class="notice-item-title">${escHtml(notice.message || '공지')}</div>
         <div class="notice-item-meta">${escHtml(notice.timestamp || '')} · ${notice.year}년 ${notice.month}월</div>
@@ -462,6 +468,7 @@
   }
 
   function openReportModal(){
+    if(!canUseReportTools()) return;
     const template = buildReportTemplate();
     openModal(`
       <div class="modal-head">
@@ -632,6 +639,38 @@
     return Array.isArray(entry?.tags) && entry.tags.includes('희망휴무');
   }
 
+  function getWishOffDraftAction(dateKey){
+    if(!state.viewerWishOffDrafts || typeof state.viewerWishOffDrafts !== 'object') return null;
+    if(Object.prototype.hasOwnProperty.call(state.viewerWishOffDrafts, dateKey)){
+      return !!state.viewerWishOffDrafts[dateKey];
+    }
+    return null;
+  }
+
+  function countWishOffDrafts(){
+    if(!state.viewerWishOffDrafts || typeof state.viewerWishOffDrafts !== 'object') return 0;
+    return Object.keys(state.viewerWishOffDrafts).length;
+  }
+
+  function clearWishOffDrafts(){
+    state.viewerWishOffDrafts = {};
+  }
+
+  function getSelectedEmployee(){
+    if(!state.selectedEmployeeId) return null;
+    return state.employees.find(e => Number(e.id) === Number(state.selectedEmployeeId)) || null;
+  }
+
+  function getCurrentMonthWishOffDates(empId){
+    if(!empId) return [];
+    ensureScheduleForMonth(state.year, state.month);
+    const prefix = getMonthKeyPrefix(state.year, state.month);
+    const bucket = state.schedule?.[empId] || {};
+    return Object.keys(bucket)
+      .filter(dateKey => dateKey.startsWith(prefix) && isWishOffTagged(bucket[dateKey]))
+      .sort();
+  }
+
   function isViewerWishOffMode(){
     return !isAdmin() && !!state.viewerWishOffMode && !!state.selectedEmployeeId;
   }
@@ -747,7 +786,14 @@
         cellClass += ' emp-work-highlight';
       }
       if(isViewerWishOffMode()){
-        cellClass += isWishOffTagged(selectedEntry) ? ' wishoff-selected' : ' wishoff-target';
+        const draftAction = getWishOffDraftAction(dateKey);
+        if(draftAction === true){
+          cellClass += ' wishoff-pending-add';
+        }else if(draftAction === false){
+          cellClass += ' wishoff-pending-remove';
+        }else{
+          cellClass += isWishOffTagged(selectedEntry) ? ' wishoff-selected' : ' wishoff-target';
+        }
       }
     }
     return cellClass;
@@ -1192,8 +1238,70 @@
     }
   }
 
+  function renderWishOffHelper(){
+    const panel = document.getElementById('wishOffHelper');
+    if(!panel) return;
+    if(isAdmin()){
+      panel.classList.add('hidden');
+      return;
+    }
+
+    const emp = getSelectedEmployee();
+    if(!emp){
+      panel.classList.add('hidden');
+      panel.innerHTML = '';
+      return;
+    }
+
+    const appliedDates = getCurrentMonthWishOffDates(emp.id);
+    const draftEntries = Object.entries(state.viewerWishOffDrafts || {}).sort((a, b) => a[0].localeCompare(b[0]));
+    const modeActive = isViewerWishOffMode();
+
+    const draftMarkup = draftEntries.length
+      ? `<div class="wishoff-chip-list">
+          ${draftEntries.map(([dateKey, enabled]) => `
+            <button class="wishoff-chip-btn ${enabled ? 'pending-add' : 'pending-remove'}" type="button" onclick="handleViewerWishOffClick('${dateKey}')">
+              ${dateKey} · ${enabled ? '신청 예정' : '해제 예정'}
+            </button>
+          `).join('')}
+        </div>`
+      : `<div class="wishoff-helper-empty">${modeActive ? '달력에서 날짜를 눌러 추가하거나, 아래 신청 날짜를 눌러 해제할 수 있어.' : '희망휴무 입력을 켜면 여러 날짜를 한 번에 선택할 수 있어.'}</div>`;
+
+    const appliedMarkup = appliedDates.length
+      ? `<div class="wishoff-chip-list">
+          ${appliedDates.map(dateKey => {
+            const draftAction = getWishOffDraftAction(dateKey);
+            const extraClass = draftAction === false ? 'pending-remove' : (draftAction === true ? 'pending-add' : '');
+            const suffix = draftAction === false ? ' · 해제 예정' : '';
+            return `<button class="wishoff-chip-btn ${extraClass}" type="button" onclick="${modeActive ? `handleViewerWishOffClick('${dateKey}')` : 'void(0)'}">${dateKey}${suffix}</button>`;
+          }).join('')}
+        </div>`
+      : `<div class="wishoff-helper-empty">이번 달 희망휴무 신청 내역이 아직 없어.</div>`;
+
+    panel.innerHTML = `
+      <div class="wishoff-helper-head">
+        <div>
+          <div class="wishoff-helper-title">${emp.name} 희망휴무</div>
+          <div class="wishoff-helper-desc">입력 모드에서는 달력 날짜를 눌러 신청 예정이나 해제 예정으로 바꾸고, 상단의 선택 저장으로 한 번에 반영할 수 있어.</div>
+        </div>
+      </div>
+      <div class="wishoff-helper-grid">
+        <div class="wishoff-helper-card">
+          <div class="wishoff-helper-label">현재 선택 중</div>
+          ${draftMarkup}
+        </div>
+        <div class="wishoff-helper-card">
+          <div class="wishoff-helper-label">이번 달 신청됨</div>
+          ${appliedMarkup}
+        </div>
+      </div>
+    `;
+    panel.classList.remove('hidden');
+  }
+
   function setEmployeeFilter(value){
     state.selectedEmployeeId = value ? Number(value) : null;
+    clearWishOffDrafts();
     if(!state.selectedEmployeeId) state.viewerWishOffMode = false;
     saveState();
     renderAll();
@@ -1202,6 +1310,7 @@
   function clearEmployeeFilter(){
     state.selectedEmployeeId = null;
     state.viewerWishOffMode = false;
+    clearWishOffDrafts();
     saveState();
     renderAll();
   }
@@ -1212,40 +1321,70 @@
       alert('먼저 본인 이름을 선택해줘.');
       return;
     }
+    if(state.viewerWishOffMode){
+      clearWishOffDrafts();
+    }
     state.viewerWishOffMode = !state.viewerWishOffMode;
     renderAll();
   }
 
   async function handleViewerWishOffClick(dateKey){
     if(!isViewerWishOffMode()) return;
-    const selectedId = Number(state.selectedEmployeeId);
-    const entry = getEntry(selectedId, dateKey);
     const dt = parseDateKey(dateKey);
     if(dt.getDay() === 0 || isHolidayDate(dateKey)){
       alert('이미 기본 휴무인 날짜는 희망휴무 신청이 필요 없어.');
       return;
     }
 
+    const selectedId = Number(state.selectedEmployeeId);
+    const entry = getEntry(selectedId, dateKey);
+    const currentDraft = getWishOffDraftAction(dateKey);
+    if(currentDraft === null){
+      if(!state.viewerWishOffDrafts || typeof state.viewerWishOffDrafts !== 'object') state.viewerWishOffDrafts = {};
+      state.viewerWishOffDrafts[dateKey] = !isWishOffTagged(entry);
+    }else{
+      delete state.viewerWishOffDrafts[dateKey];
+    }
+    renderAll();
+  }
+
+  function cancelViewerWishOffSelection(){
+    clearWishOffDrafts();
+    renderAll();
+  }
+
+  async function submitViewerWishOffBatch(){
+    if(!isViewerWishOffMode()) return;
+    const drafts = Object.entries(state.viewerWishOffDrafts || {});
+    if(!drafts.length){
+      alert('먼저 날짜를 선택해줘.');
+      return;
+    }
+
+    const selectedId = Number(state.selectedEmployeeId);
     showSyncStatus('saving');
     try{
-      const res = await fetch('/api/request-wish-off', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          employeeId: selectedId,
-          dateKey,
-          enabled: !isWishOffTagged(entry),
-          baseRevision: Number(state._revision || 0)
-        })
-      });
-      const data = await res.json();
-      if(!res.ok){
-        throw new Error(data.error || '희망휴무 저장 실패');
+      for(const [dateKey, enabled] of drafts){
+        const res = await fetch('/api/request-wish-off', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            employeeId: selectedId,
+            dateKey,
+            enabled: !!enabled,
+            baseRevision: Number(state._revision || 0)
+          })
+        });
+        const data = await res.json();
+        if(!res.ok){
+          throw new Error(data.error || '희망휴무 저장 실패');
+        }
+        const { isAdmin: _ignoredIsAdmin, ...safeState } = data.state || {};
+        state = { ...state, ...safeState };
+        if(!Array.isArray(state.notices)) state.notices = [];
+        state._revision = Number(state._revision || 0);
       }
-      const { isAdmin: _ignoredIsAdmin, ...safeState } = data.state || {};
-      state = { ...state, ...safeState };
-      if(!Array.isArray(state.notices)) state.notices = [];
-      state._revision = Number(state._revision || 0);
+      clearWishOffDrafts();
       showSyncStatus('saved');
       renderAll();
     }catch(e){
@@ -1400,9 +1539,19 @@
       adminBtn.textContent = adminMode ? '관리자 로그아웃' : '관리자 로그인';
     }
     const wishOffBtn = document.getElementById('wishOffModeBtn');
+    const wishOffSaveBtn = document.getElementById('wishOffSaveBtn');
+    const wishOffCancelBtn = document.getElementById('wishOffCancelBtn');
+    const draftCount = countWishOffDrafts();
     if(wishOffBtn){
-      wishOffBtn.textContent = state.viewerWishOffMode ? '희망휴무 입력 중' : '희망휴무 입력 켜기';
+      wishOffBtn.textContent = state.viewerWishOffMode ? `희망휴무 입력 중${draftCount ? ` (${draftCount})` : ''}` : '희망휴무 입력 켜기';
       wishOffBtn.classList.toggle('toggle-active', !!state.viewerWishOffMode);
+    }
+    if(wishOffSaveBtn){
+      wishOffSaveBtn.classList.toggle('hidden', !state.viewerWishOffMode);
+      wishOffSaveBtn.textContent = draftCount ? `선택 저장 (${draftCount})` : '선택 저장';
+    }
+    if(wishOffCancelBtn){
+      wishOffCancelBtn.classList.toggle('hidden', !state.viewerWishOffMode);
     }
 
     if(!adminMode){
@@ -1432,6 +1581,7 @@
     renderHolidayTables();
     renderStats();
     renderEmployeeFilter();
+    renderWishOffHelper();
     renderNoticePanel();
     renderMemos();
 
@@ -2215,20 +2365,18 @@
       knownLatestChangeId = logs[0]?.id ?? knownLatestChangeId;
       renderNoticePanel();
       if(badge){ badge.style.display='none'; }
+      const reportButton = canUseReportTools() ? `
+        <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">
+          <button class="btn small" type="button" onclick="openReportModal()">보고문 만들기</button>
+        </div>
+      ` : '';
       if(!logs.length){
-        el.innerHTML = `
-          <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">
-            <button class="btn small" type="button" onclick="openReportModal()">보고문 만들기</button>
-          </div>
+        el.innerHTML = reportButton + `
           <div class="muted" style="font-size:13px;padding:8px 0;">아직 변경이력이 없어.</div>
         `;
         return;
       }
-      el.innerHTML = `
-        <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">
-          <button class="btn small" type="button" onclick="openReportModal()">보고문 만들기</button>
-        </div>
-      ` + logs.map(log => `
+      el.innerHTML = reportButton + logs.map(log => `
         <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:#fff;border:1px solid var(--line);border-radius:12px;">
           <div style="flex:1;min-width:0;">
             <div style="font-size:13px;font-weight:800;margin-bottom:3px;">${escHtml(log.note)}</div>
@@ -2246,6 +2394,7 @@
 
   async function refreshFromServer(){
     await loadState(true);
+    state.activeTab = 'calendar';
     ensureHighlightColors();
     ensureEarlyShiftSetting();
     ensureVisibleRows();

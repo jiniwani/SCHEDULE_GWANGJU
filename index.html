@@ -21,7 +21,7 @@
         </div>
 
         <div class="toolbar no-print">
-          <div class="filter-box viewer-only">
+          <div class="filter-box">
             <div class="filter-controls">
               <div class="filter-box">
                 <label for="employeeFilter">검사자 보기</label>
@@ -45,6 +45,8 @@
                 <button class="preset-btn preset-violet" type="button" title="보라" aria-label="보라 프리셋" onclick="applyColorPreset('violet')"></button>
               </div>
               <button class="btn small viewer-only" id="wishOffModeBtn" type="button" onclick="toggleWishOffMode()">희망휴무 입력 끄기</button>
+              <button class="btn small viewer-only hidden" id="wishOffSaveBtn" type="button" onclick="submitViewerWishOffBatch()">선택 저장</button>
+              <button class="btn small viewer-only hidden" id="wishOffCancelBtn" type="button" onclick="cancelViewerWishOffSelection()">선택 취소</button>
             </div>
           </div>
 
@@ -97,6 +99,8 @@
           </div>
           <div class="notice-list" id="noticeList"></div>
         </div>
+
+        <div class="wishoff-helper no-print viewer-only hidden" id="wishOffHelper"></div>
 
         <div class="legend no-print">
           <div class="legend-item"><span class="dot" style="background:#fde68a"></span>연차</div>
