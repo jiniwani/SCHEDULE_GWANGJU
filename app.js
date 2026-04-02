@@ -11,13 +11,16 @@
     '야간지원'
   ];
 
-  const ADMIN_SESSION_KEY = 'labSchedulerAdminSessionV1';
-  const ADMIN_TOKEN_KEY = 'labSchedulerAdminTokenV1';
+  const ADMIN_SESSION_KEY = 'labSchedulerSessionV2';
+  const ADMIN_TOKEN_KEY = 'labSchedulerTokenV2';
+  const ACTIVE_TEAM_KEY = 'labSchedulerActiveTeamV2';
 
   let dragData = null;
   let editingMemoId = null;
   let knownLatestChangeId = null;
   let restorePreviewSnapshotId = null;
+  let teamManagerCache = [];
+  let editingTeamConfigId = null;
 
   let state = {
     year: 2026,
@@ -54,6 +57,13 @@
     viewerWishOffMode: false,
     viewerWishOffDrafts: {},
     isAdmin: false,
+    isSuperAdmin: false,
+    sessionRole: 'guest',
+    currentTeamId: '',
+    currentTeamName: '',
+    availableTeams: [],
+    teamMeta: null,
+    authReady: false,
     highlightColors: {
       work: '#dbeafe',
       off: '#fee2e2'
@@ -164,12 +174,16 @@
   }
 
   function isAdmin(){
-    return !!state.isAdmin;
+    return state.sessionRole === 'team_admin' || state.sessionRole === 'super_admin' || !!state.isAdmin;
+  }
+
+  function isSuperAdmin(){
+    return state.sessionRole === 'super_admin' || !!state.isSuperAdmin;
   }
 
   function requireAdmin(){
     if(isAdmin()) return true;
-    alert('관리자 로그인 후 사용할 수 있어.');
+    alert('팀 관리자 또는 상위 관리자 로그인 후 사용할 수 있어.');
     return false;
   }
 
@@ -177,14 +191,47 @@
     return sessionStorage.getItem(ADMIN_TOKEN_KEY) || '';
   }
 
+  function getActiveTeamId(){
+    return state.currentTeamId || sessionStorage.getItem(ACTIVE_TEAM_KEY) || '';
+  }
+
+  function setActiveTeamId(teamId){
+    state.currentTeamId = teamId || '';
+    if(teamId){
+      sessionStorage.setItem(ACTIVE_TEAM_KEY, teamId);
+    }else{
+      sessionStorage.removeItem(ACTIVE_TEAM_KEY);
+    }
+  }
+
+  function applySessionInfo(session){
+    const safeSession = session || {};
+    state.sessionRole = safeSession.role || 'guest';
+    state.isAdmin = safeSession.role === 'team_admin' || safeSession.role === 'super_admin';
+    state.isSuperAdmin = safeSession.role === 'super_admin';
+    state.availableTeams = Array.isArray(safeSession.teams) ? safeSession.teams : [];
+    state.currentTeamId = safeSession.teamId || getActiveTeamId() || '';
+    state.currentTeamName = safeSession.teamName || '';
+    if(state.currentTeamId){
+      sessionStorage.setItem(ACTIVE_TEAM_KEY, state.currentTeamId);
+    }
+  }
+
   function clearAdminSession(){
     state.isAdmin = false;
+    state.isSuperAdmin = false;
+    state.sessionRole = 'guest';
+    state.currentTeamId = '';
+    state.currentTeamName = '';
+    state.teamMeta = null;
+    state.authReady = true;
     sessionStorage.removeItem(ADMIN_SESSION_KEY);
     sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+    sessionStorage.removeItem(ACTIVE_TEAM_KEY);
   }
 
   function saveAdminSession(){
-    if(state.isAdmin && getAdminToken()){
+    if(state.sessionRole !== 'guest' && getAdminToken()){
       sessionStorage.setItem(ADMIN_SESSION_KEY, '1');
     }else{
       clearAdminSession();
@@ -203,13 +250,45 @@
         headers: { Authorization: `Bearer ${token}` }
       });
       if(res.ok){
-        state.isAdmin = true;
+        const data = await res.json().catch(() => ({}));
+        applySessionInfo(data.session || {});
+        state.authReady = true;
         sessionStorage.setItem(ADMIN_SESSION_KEY, '1');
         return;
       }
     }catch(e){}
 
     clearAdminSession();
+  }
+
+  async function loadAuthOptions(){
+    try{
+      const res = await fetch('/api/auth/options');
+      const data = await res.json().catch(() => ({}));
+      if(res.ok && Array.isArray(data.teams)){
+        state.availableTeams = data.teams;
+      }
+    }catch(e){}
+  }
+
+  function getAuthHeaders(extra = {}){
+    const headers = { ...extra };
+    const token = getAdminToken();
+    if(token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+  }
+
+  function buildApiUrl(path, extras = {}){
+    const params = new URLSearchParams();
+    const teamId = getActiveTeamId();
+    if(teamId) params.set('teamId', teamId);
+    Object.entries(extras).forEach(([key, value]) => {
+      if(value !== undefined && value !== null && value !== ''){
+        params.set(key, value);
+      }
+    });
+    const query = params.toString();
+    return query ? `${path}?${query}` : path;
   }
 
   let syncTimer = null;
@@ -248,15 +327,16 @@
       try{
       const { isAdmin: _a, ...payload } = state;
       delete payload.memoOpen;
-        const res = await fetch('/api/state', {
+        const res = await fetch(buildApiUrl('/api/state'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           ...payload,
           _adminToken: getAdminToken(),
           _changeNote: changeNote,
           _noticeContent: noticeContent,
-          _baseRevision: Number(state._revision || 0)
+          _baseRevision: Number(state._revision || 0),
+          teamId: getActiveTeamId()
         })
       });
       if(res.status === 403){
@@ -312,13 +392,14 @@
     if(!confirm('이 공지를 삭제할까?')) return;
     showSyncStatus('saving');
     try{
-      const res = await fetch('/api/delete-notice', {
+      const res = await fetch(buildApiUrl('/api/delete-notice'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           adminToken: getAdminToken(),
           noticeId: Number(noticeId),
-          baseRevision: Number(state._revision || 0)
+          baseRevision: Number(state._revision || 0),
+          teamId: getActiveTeamId()
         })
       });
       const data = await res.json();
@@ -347,12 +428,13 @@
     if(!confirm('이 변경이력을 삭제할까?')) return;
     showSyncStatus('saving');
     try{
-      const res = await fetch('/api/delete-changelog', {
+      const res = await fetch(buildApiUrl('/api/delete-changelog'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           adminToken: getAdminToken(),
-          logId: Number(logId)
+          logId: Number(logId),
+          teamId: getActiveTeamId()
         })
       });
       const data = await res.json();
@@ -582,17 +664,30 @@
   async function loadState(forceFresh = false){
     showSyncStatus('loading');
     try{
-      const url = forceFresh ? '/api/state?fresh=1' : '/api/state';
-      const res = await fetch(url);
-        if(res.ok){
+      const url = buildApiUrl('/api/state', forceFresh ? { fresh: '1' } : {});
+      const res = await fetch(url, {
+        headers: getAuthHeaders()
+      });
+      if(res.ok){
           const parsed = await res.json();
-          const { isAdmin: _ignoredIsAdmin, ...safeParsed } = parsed;
+          const {
+            isAdmin: _ignoredIsAdmin,
+            _teamMeta,
+            _session,
+            ...safeParsed
+          } = parsed;
           state = { ...state, ...safeParsed };
+          state.teamMeta = _teamMeta || null;
+          if(_session) applySessionInfo(_session);
           state.memoOpen = false;
           if(!Array.isArray(state.notices)) state.notices = [];
           if(!Array.isArray(state.snapshots)) state.snapshots = [];
           state._revision = Number(state._revision || 0);
+          state.authReady = true;
         showSyncStatus('loaded');
+      } else if(res.status === 403){
+        clearAdminSession();
+        showSyncStatus('error');
       } else {
         showSyncStatus('error');
       }
@@ -743,7 +838,7 @@
   }
 
   function isViewerWishOffMode(){
-    return !isAdmin() && !!state.viewerWishOffMode && !!state.selectedEmployeeId;
+    return state.sessionRole === 'team_viewer' && !!state.viewerWishOffMode && !!state.selectedEmployeeId;
   }
 
   function getEmployeesByShift(dateKey, shift){
@@ -976,9 +1071,10 @@
     const selectedEmp = state.selectedEmployeeId
       ? state.employees.find(e => Number(e.id) === Number(state.selectedEmployeeId))
       : null;
+    const teamTitle = state.currentTeamName ? ` · ${state.currentTeamName}` : '';
     document.getElementById('printTitle').textContent = selectedEmp
-      ? `${state.year}년 ${state.month}월 근무표 (${selectedEmp.name})`
-      : `${state.year}년 ${state.month}월 근무표`;
+      ? `${state.year}년 ${state.month}월 근무표${teamTitle} (${selectedEmp.name})`
+      : `${state.year}년 ${state.month}월 근무표${teamTitle}`;
 
     const weeks = getRenderWeeks(state.year, state.month);
     const realWeekCount = weeks.filter(week => isRealMonthInWeek(week, state.year, state.month)).length;
@@ -1076,18 +1172,29 @@
     return _html2canvasLoader;
   }
 
-  let _excelJsLoader = null;
-  function loadExcelJs(){
-    if(window.ExcelJS) return Promise.resolve(window.ExcelJS);
-    if(_excelJsLoader) return _excelJsLoader;
-    _excelJsLoader = new Promise((resolve, reject) => {
+  let _xlsxPopulateLoader = null;
+  function loadXlsxPopulate(){
+    if(window.XlsxPopulate) return Promise.resolve(window.XlsxPopulate);
+    if(_xlsxPopulateLoader) return _xlsxPopulateLoader;
+    _xlsxPopulateLoader = new Promise((resolve, reject) => {
       const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
-      script.onload = () => resolve(window.ExcelJS);
+      script.src = 'https://cdn.jsdelivr.net/npm/xlsx-populate/browser/xlsx-populate.min.js';
+      script.onload = () => resolve(window.XlsxPopulate);
       script.onerror = () => reject(new Error('엑셀 저장 도구를 불러오지 못했어.'));
       document.head.appendChild(script);
     });
-    return _excelJsLoader;
+    return _xlsxPopulateLoader;
+  }
+
+  function excelColumnName(index){
+    let column = '';
+    let current = index;
+    while(current > 0){
+      const remainder = (current - 1) % 26;
+      column = String.fromCharCode(65 + remainder) + column;
+      current = Math.floor((current - 1) / 26);
+    }
+    return column;
   }
 
   function getExcelEmployees(){
@@ -1179,32 +1286,26 @@
   }
 
   async function loadExcelTemplateWorkbook(){
-    const ExcelJS = await loadExcelJs();
+    const XlsxPopulate = await loadXlsxPopulate();
     const res = await fetch('./schedule-report-template.xlsx');
     if(!res.ok) throw new Error('보고 양식 템플릿 파일을 찾지 못했어.');
     const buffer = await res.arrayBuffer();
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer);
-    workbook.creator = '검사실 근무표 스케줄러';
-    workbook.created = new Date();
-    workbook.calcProperties.fullCalcOnLoad = true;
-    workbook.calcProperties.forceFullCalc = true;
-    return workbook;
+    return XlsxPopulate.fromDataAsync(buffer);
   }
 
   function getExcelTemplateWorksheet(workbook){
-    return workbook.getWorksheet('12월 취합 (야간근무+연장)') || workbook.worksheets[0];
+    return workbook.sheet('12월 취합 (야간근무+연장)') || workbook.sheets()[0];
   }
 
   function clearTemplateRow(worksheet, rowNumber){
     for(let column = 1; column <= 5; column++){
-      worksheet.getCell(rowNumber, column).value = null;
+      worksheet.cell(`${excelColumnName(column)}${rowNumber}`).value('');
     }
     for(let column = 6; column <= 36; column++){
-      worksheet.getCell(rowNumber, column).value = null;
+      worksheet.cell(`${excelColumnName(column)}${rowNumber}`).value('');
     }
-    worksheet.getCell(rowNumber, 38).value = null;
-    worksheet.getCell(rowNumber, 55).value = null;
+    worksheet.cell(`AL${rowNumber}`).value('');
+    worksheet.cell(`BC${rowNumber}`).value('');
   }
 
   function getEmployeeReportCode(emp){
@@ -1224,12 +1325,6 @@
     try{
       const workbook = await loadExcelTemplateWorkbook();
       const worksheet = getExcelTemplateWorksheet(workbook);
-      workbook.worksheets.slice().forEach(sheet => {
-        if(sheet.id !== worksheet.id) workbook.removeWorksheet(sheet.id);
-      });
-
-      worksheet.name = `${state.month}월 취합`;
-      worksheet.views = [{ state: 'frozen', xSplit: 5, ySplit: 7 }];
 
       const employees = getExcelEmployees();
       const days = getDays(state.year, state.month);
@@ -1239,20 +1334,21 @@
         throw new Error('보고 양식에 들어갈 직원 수를 초과했어.');
       }
 
-      const defaultRegion = worksheet.getCell('B8').text || '광주';
-      const defaultDepartment = worksheet.getCell('C8').text || '분자미생물학팀';
+      const defaultRegion = state.teamMeta?.region || worksheet.cell('B8').value() || '광주';
+      const defaultDepartment = state.teamMeta?.department || worksheet.cell('C8').value() || '분자미생물학팀';
 
-      worksheet.getCell('F3').value = state.month;
-      worksheet.getCell('K3').value = getStandardWorkableDays(state.year, state.month);
-      worksheet.getCell('N3').value = '기준\n일수\n(8hr)';
-      worksheet.getCell('P3').value = '';
-      worksheet.getCell('AL7').value = '개인 기준 \n(8hr)';
+      worksheet.cell('F3').value(state.month);
+      worksheet.cell('K3').value(getStandardWorkableDays(state.year, state.month));
+      worksheet.cell('C3').value(`${state.teamMeta?.location || '광주호남검사센터'}\n${defaultDepartment} (${state.teamMeta?.workType || '주 5일제'})`);
+      worksheet.cell('N3').value(`기준\n일수\n(${state.teamMeta?.standardHours || '8hr'})`);
+      worksheet.cell('P3').value('');
+      worksheet.cell('AL7').value(`개인 기준 \n(${state.teamMeta?.standardHours || '8hr'})`);
 
       for(let column = 6; column <= 36; column++){
-        worksheet.getCell(7, column).value = null;
+        worksheet.cell(`${excelColumnName(column)}7`).value('');
       }
       for(let d = 1; d <= days; d++){
-        worksheet.getCell(7, 5 + d).value = d;
+        worksheet.cell(`${excelColumnName(5 + d)}7`).value(d);
       }
 
       for(let rowNumber = firstEmployeeRow; rowNumber <= lastEmployeeRow; rowNumber++){
@@ -1262,24 +1358,20 @@
       employees.forEach((emp, index) => {
         const rowNumber = firstEmployeeRow + index;
         const metrics = buildExcelEmployeeMetrics(emp, state.year, state.month);
-        worksheet.getCell(`A${rowNumber}`).value = index + 1;
-        worksheet.getCell(`B${rowNumber}`).value = emp.region || defaultRegion;
-        worksheet.getCell(`C${rowNumber}`).value = emp.department || defaultDepartment;
-        worksheet.getCell(`D${rowNumber}`).value = getEmployeeReportCode(emp);
-        worksheet.getCell(`E${rowNumber}`).value = emp.name;
-        worksheet.getCell(`AL${rowNumber}`).value = '';
-        worksheet.getCell(`BC${rowNumber}`).value = metrics.notes || '';
+        worksheet.cell(`A${rowNumber}`).value(index + 1);
+        worksheet.cell(`B${rowNumber}`).value(emp.region || defaultRegion);
+        worksheet.cell(`C${rowNumber}`).value(emp.department || defaultDepartment);
+        worksheet.cell(`D${rowNumber}`).value(getEmployeeReportCode(emp));
+        worksheet.cell(`E${rowNumber}`).value(emp.name);
+        worksheet.cell(`AL${rowNumber}`).value('');
+        worksheet.cell(`BC${rowNumber}`).value(metrics.notes || '');
 
         metrics.dayCodes.forEach((code, dayIndex) => {
-          worksheet.getCell(rowNumber, 6 + dayIndex).value = code;
+          worksheet.cell(`${excelColumnName(6 + dayIndex)}${rowNumber}`).value(code);
         });
       });
 
-      const buffer = await workbook.xlsx.writeBuffer();
-      const blob = new Blob(
-        [buffer],
-        { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
-      );
+      const blob = await workbook.outputAsync();
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -1788,14 +1880,15 @@
     showSyncStatus('saving');
     try{
       for(const [dateKey, enabled] of drafts){
-        const res = await fetch('/api/request-wish-off', {
+        const res = await fetch(buildApiUrl('/api/request-wish-off'), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             employeeId: selectedId,
             dateKey,
             enabled: !!enabled,
-            baseRevision: Number(state._revision || 0)
+            baseRevision: Number(state._revision || 0),
+            teamId: getActiveTeamId()
           })
         });
         const data = await res.json();
@@ -1944,22 +2037,35 @@
 
   function applyRoleView(){
     const adminMode = isAdmin();
+    const viewerMode = state.sessionRole === 'team_viewer';
+    const guestMode = state.sessionRole === 'guest';
     document.querySelectorAll('.admin-only').forEach(el=>{
       el.classList.toggle('hidden-by-role', !adminMode);
     });
     document.querySelectorAll('.viewer-only').forEach(el=>{
-      el.classList.toggle('hidden-by-role', adminMode);
+      el.classList.toggle('hidden-by-role', !viewerMode);
+    });
+    document.querySelectorAll('.super-admin-only').forEach(el=>{
+      el.classList.toggle('hidden-by-role', !isSuperAdmin());
     });
 
     const roleBadge = document.getElementById('roleBadge');
     const adminBtn = document.getElementById('adminAuthBtn');
     if(roleBadge){
-      roleBadge.textContent = adminMode ? '관리자 모드 · 편집 가능' : '읽기 전용 · 희망휴무만 입력 가능';
-      roleBadge.classList.toggle('admin', adminMode);
-      roleBadge.classList.toggle('viewer', !adminMode);
+      if(isSuperAdmin()){
+        roleBadge.textContent = `상위 관리자 · ${state.currentTeamName || '전체 팀'}`;
+      }else if(adminMode){
+        roleBadge.textContent = `${state.currentTeamName || '현재 팀'} 관리자 · 편집 가능`;
+      }else if(viewerMode){
+        roleBadge.textContent = `${state.currentTeamName || '현재 팀'} 조회 모드`;
+      }else{
+        roleBadge.textContent = '로그인 필요';
+      }
+      roleBadge.classList.toggle('admin', adminMode || isSuperAdmin());
+      roleBadge.classList.toggle('viewer', viewerMode || guestMode);
     }
     if(adminBtn){
-      adminBtn.textContent = adminMode ? '관리자 로그아웃' : '관리자 로그인';
+      adminBtn.textContent = guestMode ? '로그인' : '로그아웃';
     }
     const wishOffBtn = document.getElementById('wishOffModeBtn');
     const wishOffSaveBtn = document.getElementById('wishOffSaveBtn');
@@ -1982,11 +2088,68 @@
     }
   }
 
+  function renderTeamSwitcher(){
+    const wrap = document.getElementById('teamSwitcherWrap');
+    const select = document.getElementById('teamSwitcher');
+    if(!wrap || !select) return;
+    if(!isSuperAdmin() || !state.availableTeams.length){
+      wrap.classList.add('hidden');
+      return;
+    }
+    wrap.classList.remove('hidden');
+    select.innerHTML = state.availableTeams
+      .map(team => `<option value="${team.id}">${team.name}</option>`)
+      .join('');
+    select.value = getActiveTeamId() || state.availableTeams[0]?.id || '';
+  }
+
+  function renderAuthGate(forceOpen = false){
+    const gate = document.getElementById('authGate');
+    const body = document.getElementById('authGateBody');
+    if(!gate || !body) return;
+    const needsAuth = forceOpen || state.sessionRole === 'guest' || !getAdminToken();
+    gate.classList.toggle('hidden', !needsAuth);
+    if(!needsAuth) return;
+
+    const teamOptions = state.availableTeams.length
+      ? state.availableTeams.map(team => `<option value="${team.id}">${team.name}</option>`).join('')
+      : '<option value="">등록된 팀 없음</option>';
+
+    body.innerHTML = `
+      <div class="form-row" style="flex-direction:column;align-items:stretch;gap:12px;">
+        <div class="field" style="min-width:100%;">
+          <label>로그인 유형</label>
+          <select id="authLoginType" onchange="toggleAuthTeamField()">
+            <option value="team_viewer">팀 조회</option>
+            <option value="team_admin">팀 관리자</option>
+            <option value="super_admin">상위 관리자</option>
+          </select>
+        </div>
+        <div class="field" id="authTeamField" style="min-width:100%;">
+          <label>팀</label>
+          <select id="authTeamId">${teamOptions}</select>
+        </div>
+        <div class="field" style="min-width:100%;">
+          <label>비밀번호</label>
+          <input id="authPasswordInput" type="password" placeholder="비밀번호" onkeydown="if(event.key==='Enter') submitAdminLogin()" />
+        </div>
+        <div class="muted" style="font-size:12px;">팀별 조회/관리자 비밀번호는 상위 관리자 화면에서 따로 관리할 수 있어.</div>
+      </div>
+      <div class="modal-actions" style="margin-top:16px;">
+        <button class="btn" onclick="openRecoverPasswordModal()">상위 관리자 비밀번호 복원</button>
+        <button class="btn primary" onclick="submitAdminLogin()">로그인</button>
+      </div>
+    `;
+    toggleAuthTeamField();
+  }
+
   function renderAll(){
     ensureEarlyShiftSetting();
     ensureVisibleRows();
     applyHighlightColors();
     applyRoleView();
+    renderTeamSwitcher();
+    renderAuthGate();
     renderLastSavedInfo();
     const earlyBtn = document.getElementById('earlyShiftToggleBtn');
     if(earlyBtn){
@@ -2029,39 +2192,235 @@
     renderAll();
   }
 
-  function handleAdminAuth(){
-    if(isAdmin()){
-      clearAdminSession();
-      saveState();
-      renderAll();
-      return;
-    }
+  async function handleTeamSwitch(teamId){
+    if(!isSuperAdmin()) return;
+    if(!teamId || teamId === getActiveTeamId()) return;
+    setActiveTeamId(teamId);
+    await loadState(true);
+    await loadChangelog(true);
+    renderAll();
+  }
+
+  async function fetchTeamManagerList(){
+    const res = await fetch('/api/teams', {
+      headers: getAuthHeaders()
+    });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok) throw new Error(data.error || '팀 목록을 불러오지 못했어.');
+    teamManagerCache = Array.isArray(data.teams) ? data.teams : [];
+    state.availableTeams = [...teamManagerCache];
+  }
+
+  function renderTeamManagerModal(){
+    const selected = editingTeamConfigId
+      ? teamManagerCache.find(team => team.id === editingTeamConfigId)
+      : null;
+    const listMarkup = teamManagerCache.map(team => `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:#fff;">
+        <div style="min-width:0;">
+          <div style="font-weight:800;">${escHtml(team.name)}</div>
+          <div style="font-size:12px;color:var(--muted);">${escHtml(team.department || '')} · ${escHtml(team.location || '')}</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn small" type="button" onclick="editTeamConfig('${team.id}')">수정</button>
+          <button class="btn small danger" type="button" onclick="deleteTeamConfig('${team.id}')">삭제</button>
+        </div>
+      </div>
+    `).join('');
 
     openModal(`
       <div class="modal-head">
-        <div class="modal-title">관리자 로그인</div>
+        <div class="modal-title">팀 관리</div>
         <button class="btn" onclick="closeModal()">닫기</button>
       </div>
-
-      <div class="form-row">
-        <div class="field" style="min-width:260px">
-          <label>비밀번호</label>
-          <input id="adminPasswordInput" type="password" placeholder="관리자 비밀번호" onkeydown="if(event.key==='Enter') submitAdminLogin()" />
+      <div style="display:grid;grid-template-columns:minmax(220px, 1fr) minmax(280px, 1.2fr);gap:16px;">
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div style="font-size:13px;font-weight:800;">등록된 팀</div>
+          ${listMarkup || `<div class="muted">등록된 팀이 없어.</div>`}
+          <button class="btn" type="button" onclick="startCreateTeam()">새 팀 추가</button>
         </div>
-      </div>
-
-      <div class="modal-actions">
-        <button class="btn" onclick="closeModal()">취소</button>
-        <button class="btn" onclick="openRecoverPasswordModal()">비밀번호 복원</button>
-        <button class="btn primary" onclick="submitAdminLogin()">로그인</button>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div style="font-size:13px;font-weight:800;">${selected ? '팀 수정' : '새 팀 추가'}</div>
+          <div class="field">
+            <label>팀 이름</label>
+            <input id="teamFormName" type="text" value="${selected ? escHtml(selected.name || '') : ''}" placeholder="예: 분자미생물학팀" />
+          </div>
+          <div class="field">
+            <label>부서명</label>
+            <input id="teamFormDepartment" type="text" value="${selected ? escHtml(selected.department || '') : ''}" placeholder="엑셀 보고용 부서명" />
+          </div>
+          <div class="field">
+            <label>센터/위치</label>
+            <input id="teamFormLocation" type="text" value="${selected ? escHtml(selected.location || '') : ''}" placeholder="예: 광주호남검사센터" />
+          </div>
+          <div class="field">
+            <label>지역</label>
+            <input id="teamFormRegion" type="text" value="${selected ? escHtml(selected.region || '') : '광주'}" />
+          </div>
+          <div class="field">
+            <label>근무 타입 표기</label>
+            <input id="teamFormWorkType" type="text" value="${selected ? escHtml(selected.workType || '') : '주 5일제'}" />
+          </div>
+          <div class="field">
+            <label>기준 시간 표기</label>
+            <input id="teamFormStandardHours" type="text" value="${selected ? escHtml(selected.standardHours || '') : '8시간'}" />
+          </div>
+          <div class="field">
+            <label>팀 관리자 비밀번호 ${selected ? '(변경 시에만 입력)' : ''}</label>
+            <input id="teamFormAdminPassword" type="password" placeholder="${selected ? '비워두면 유지' : '4자 이상'}" />
+          </div>
+          <div class="field">
+            <label>팀 조회 비밀번호 ${selected ? '(변경 시에만 입력)' : ''}</label>
+            <input id="teamFormViewerPassword" type="password" placeholder="${selected ? '비워두면 유지' : '4자 이상'}" />
+          </div>
+          <div id="teamFormMsg" class="muted" style="min-height:20px;font-size:12px;"></div>
+          <div class="modal-actions">
+            <button class="btn" type="button" onclick="startCreateTeam()">새 팀 입력</button>
+            <button class="btn primary" type="button" onclick="saveTeamConfig()">${selected ? '수정 저장' : '팀 생성'}</button>
+          </div>
+        </div>
       </div>
     `);
   }
 
+  async function openTeamManager(){
+    if(!isSuperAdmin()){
+      alert('상위 관리자만 팀을 관리할 수 있어.');
+      return;
+    }
+    try{
+      await fetchTeamManagerList();
+      editingTeamConfigId = null;
+      renderTeamManagerModal();
+    }catch(e){
+      alert(e.message || '팀 목록을 불러오지 못했어.');
+    }
+  }
+
+  function startCreateTeam(){
+    editingTeamConfigId = null;
+    renderTeamManagerModal();
+  }
+
+  function editTeamConfig(teamId){
+    editingTeamConfigId = teamId;
+    renderTeamManagerModal();
+  }
+
+  async function saveTeamConfig(){
+    const team = {
+      name: (document.getElementById('teamFormName')?.value || '').trim(),
+      department: (document.getElementById('teamFormDepartment')?.value || '').trim(),
+      location: (document.getElementById('teamFormLocation')?.value || '').trim(),
+      region: (document.getElementById('teamFormRegion')?.value || '').trim(),
+      workType: (document.getElementById('teamFormWorkType')?.value || '').trim(),
+      standardHours: (document.getElementById('teamFormStandardHours')?.value || '').trim(),
+      adminPassword: document.getElementById('teamFormAdminPassword')?.value || '',
+      viewerPassword: document.getElementById('teamFormViewerPassword')?.value || ''
+    };
+    const msg = document.getElementById('teamFormMsg');
+    if(!team.name){
+      if(msg) msg.textContent = '팀 이름을 입력해줘.';
+      return;
+    }
+    if(!editingTeamConfigId && team.adminPassword.length < 4){
+      if(msg) msg.textContent = '새 팀의 관리자 비밀번호는 4자 이상이어야 해.';
+      return;
+    }
+    if(!editingTeamConfigId && team.viewerPassword.length < 4){
+      if(msg) msg.textContent = '새 팀의 조회 비밀번호는 4자 이상이어야 해.';
+      return;
+    }
+
+    try{
+      const shouldRelogin =
+        !!editingTeamConfigId &&
+        (!!team.adminPassword.trim() || !!team.viewerPassword.trim());
+      const res = await fetch('/api/teams', {
+        method: 'POST',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          adminToken: getAdminToken(),
+          action: editingTeamConfigId ? 'update' : 'create',
+          teamId: editingTeamConfigId || undefined,
+          team
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(data.error || '팀 저장 실패');
+      if(shouldRelogin){
+        await loadAuthOptions();
+        alert('팀 비밀번호를 변경해서 다시 로그인해줘.');
+        clearAdminSession();
+        closeModal();
+        renderAll();
+        return;
+      }
+      await loadAuthOptions();
+      await fetchTeamManagerList();
+      editingTeamConfigId = null;
+      renderTeamManagerModal();
+    }catch(e){
+      if(msg) msg.textContent = e.message || '팀 저장에 실패했어.';
+    }
+  }
+
+  async function deleteTeamConfig(teamId){
+    const team = teamManagerCache.find(item => item.id === teamId);
+    if(!team) return;
+    if(!confirm(`${team.name} 팀을 삭제할까?`)) return;
+    try{
+      const res = await fetch('/api/teams', {
+        method: 'POST',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          adminToken: getAdminToken(),
+          action: 'delete',
+          teamId
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(data.error || '팀 삭제 실패');
+      await loadAuthOptions();
+      alert('팀을 삭제했어. 보안을 위해 다시 로그인해줘.');
+      clearAdminSession();
+      renderAll();
+      closeModal();
+    }catch(e){
+      alert(e.message || '팀 삭제에 실패했어.');
+    }
+  }
+
+  async function handleAdminAuth(){
+    if(state.sessionRole !== 'guest'){
+      clearAdminSession();
+      await loadAuthOptions();
+      saveState();
+      renderAll();
+      return;
+    }
+    await loadAuthOptions();
+    renderAuthGate(true);
+  }
+
+  function toggleAuthTeamField(){
+    const loginType = document.getElementById('authLoginType')?.value || 'team_viewer';
+    const teamField = document.getElementById('authTeamField');
+    if(teamField){
+      teamField.classList.toggle('hidden', loginType === 'super_admin');
+    }
+  }
+
   async function submitAdminLogin(){
-    const value = document.getElementById('adminPasswordInput')?.value || '';
+    const loginType = document.getElementById('authLoginType')?.value || 'team_viewer';
+    const teamId = document.getElementById('authTeamId')?.value || '';
+    const value = document.getElementById('authPasswordInput')?.value || '';
     if(!value){
       alert('비밀번호를 입력해줘.');
+      return;
+    }
+    if(loginType !== 'super_admin' && !teamId){
+      alert('팀을 선택해줘.');
       return;
     }
 
@@ -2069,7 +2428,11 @@
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: value })
+        body: JSON.stringify({
+          loginType,
+          teamId,
+          password: value
+        })
       });
       const data = await res.json().catch(() => ({}));
       if(!res.ok || !data.token){
@@ -2078,9 +2441,12 @@
       }
 
       sessionStorage.setItem(ADMIN_TOKEN_KEY, data.token);
-      state.isAdmin = true;
+      applySessionInfo(data.session || {});
+      state.authReady = true;
       saveState();
-      closeModal();
+      document.getElementById('authGate')?.classList.add('hidden');
+      await loadState(true);
+      await loadChangelog(true);
       renderAll();
     }catch(e){
       alert('로그인 중 오류가 발생했어. 잠시 후 다시 시도해줘.');
@@ -2149,7 +2515,6 @@
         return;
       }
       clearAdminSession();
-      state.isAdmin = false;
       saveState();
       msgEl.textContent = '비밀번호를 재설정했어. 새 비밀번호로 다시 로그인해줘.';
       msgEl.style.color = '#16a34a';
@@ -2162,7 +2527,10 @@
 
   // ── 비밀번호 변경 모달 ──────────────────────────────────────
   function openChangeRecoveryCodeModal(){
-    if(!requireAdmin()) return;
+    if(!isSuperAdmin()){
+      alert('상위 관리자만 복구코드를 변경할 수 있어.');
+      return;
+    }
     openModal(`
       <div class="modal-head">
         <div class="modal-title">복구코드 변경</div>
@@ -2208,9 +2576,9 @@
     msgEl.style.color = '#2563eb';
 
     try{
-      const res = await fetch('/api/change-recovery-code', {
+      const res = await fetch(buildApiUrl('/api/change-recovery-code'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           adminToken: getAdminToken(),
           currentRecoveryCode: currentVal,
@@ -2337,13 +2705,14 @@
 
     showSyncStatus('saving');
     try{
-      const res = await fetch('/api/restore-snapshot', {
+      const res = await fetch(buildApiUrl('/api/restore-snapshot'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           adminToken: getAdminToken(),
           baseRevision: Number(state._revision || 0),
-          snapshotId: Number(snapshotId)
+          snapshotId: Number(snapshotId),
+          teamId: getActiveTeamId()
         })
       });
 
@@ -2386,7 +2755,7 @@
     if(!requireAdmin()) return;
     openModal(`
       <div class="modal-head">
-        <div class="modal-title">관리자 비밀번호 변경</div>
+        <div class="modal-title">${isSuperAdmin() ? '상위 관리자 비밀번호 변경' : '팀 관리자 비밀번호 변경'}</div>
         <button class="btn" onclick="closeModal()">닫기</button>
       </div>
 
@@ -2430,9 +2799,9 @@
     msgEl.style.color = '#2563eb';
 
     try{
-      const res = await fetch('/api/change-password', {
+      const res = await fetch(buildApiUrl('/api/change-password'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           adminToken: getAdminToken(),
           currentPassword: currentVal,
@@ -2911,10 +3280,18 @@
     const el = document.getElementById('changelogList');
     const badge = document.getElementById('changelogSyncStatus');
     if(!el) return;
+    if(!getAdminToken()) return;
     if(badge){ badge.textContent='불러오는 중…'; badge.className='sync-badge loading'; badge.style.display='inline-flex'; }
     try{
-      const url = forceFresh ? '/api/changelog?fresh=1' : '/api/changelog';
-      const res = await fetch(url);
+      const url = buildApiUrl('/api/changelog', forceFresh ? { fresh: '1' } : {});
+      const res = await fetch(url, {
+        headers: getAuthHeaders()
+      });
+      if(res.status === 403){
+        clearAdminSession();
+        renderAll();
+        return;
+      }
       const logs = await res.json();
       changelogCache = logs;
       knownLatestChangeId = logs[0]?.id ?? knownLatestChangeId;
@@ -2951,6 +3328,10 @@
   function escHtml(str){ return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
   async function refreshFromServer(){
+    if(!getAdminToken()){
+      renderAuthGate(true);
+      return;
+    }
     await loadState(true);
     state.activeTab = 'calendar';
     ensureHighlightColors();
@@ -2964,15 +3345,18 @@
 
   // ── 초기화 ──────────────────────────────────────────────────
   (async () => {
-    await loadState();
+    await loadAuthOptions();
     await restoreAdminSession();
+    if(getAdminToken()){
+      await loadState();
+      await loadChangelog();
+    }
     ensureHighlightColors();
     ensureEarlyShiftSetting();
     ensureVisibleRows();
     applyHighlightColors();
     ensureScheduleForMonth(state.year, state.month);
     markSaved(); // 초기 로드 시 미저장 없음
-    await loadChangelog();
     renderAll();
   })();
 

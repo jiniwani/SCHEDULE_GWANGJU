@@ -8,6 +8,13 @@
 </head>
 <body>
 <div class="app">
+  <div class="auth-gate hidden" id="authGate">
+    <div class="auth-gate-card">
+      <div class="auth-gate-title">팀 로그인</div>
+      <div class="auth-gate-desc">팀별 조회, 팀 관리자, 상위 관리자 권한으로 로그인할 수 있어.</div>
+      <div id="authGateBody"></div>
+    </div>
+  </div>
   <div class="layout">
     <div class="main-area">
       <div class="topbar">
@@ -23,6 +30,10 @@
         <div class="toolbar no-print">
           <div class="filter-box">
             <div class="filter-controls">
+              <div class="team-switcher hidden" id="teamSwitcherWrap">
+                <label for="teamSwitcher">팀</label>
+                <select id="teamSwitcher" onchange="handleTeamSwitch(this.value)"></select>
+              </div>
               <div class="filter-box">
                 <label for="employeeFilter">검사자 보기</label>
                 <select id="employeeFilter" onchange="setEmployeeFilter(this.value)"></select>
@@ -64,7 +75,7 @@
 
           <button class="btn viewer-only" onclick="exportScheduleAsExcel()">엑셀</button>
           <button class="btn viewer-only" onclick="triggerPrint()">인쇄</button>
-          <button class="btn" id="adminAuthBtn" onclick="handleAdminAuth()">관리자 로그인</button>
+          <button class="btn" id="adminAuthBtn" onclick="handleAdminAuth()">로그인</button>
         </div>
       </div>
 
@@ -206,7 +217,15 @@
             <div class="settings-card-desc">비밀번호 변경 같은 관리자 전용 설정이야.</div>
             <div class="settings-actions">
               <button class="btn" onclick="openChangePasswordModal()">비밀번호 변경</button>
-              <button class="btn" onclick="openChangeRecoveryCodeModal()">복구코드 변경</button>
+              <button class="btn super-admin-only" onclick="openChangeRecoveryCodeModal()">복구코드 변경</button>
+            </div>
+          </section>
+
+          <section class="settings-card super-admin-only">
+            <div class="settings-card-title">팀 관리</div>
+            <div class="settings-card-desc">상위 관리자만 팀 추가, 수정, 삭제와 팀 비밀번호를 관리할 수 있어.</div>
+            <div class="settings-actions">
+              <button class="btn" onclick="openTeamManager()">팀 관리</button>
             </div>
           </section>
         </div>
