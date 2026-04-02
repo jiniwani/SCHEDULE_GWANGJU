@@ -58,9 +58,11 @@
           <div class="group admin-only">
             <button class="btn" onclick="toggleMemoPanel()" id="memoToggleBtn">메모장 열기</button>
             <button class="btn primary unsaved-save" id="explicitSaveBtn" onclick="openSaveModal()">저장</button>
+              <button class="btn" onclick="exportScheduleAsExcel()">엑셀</button>
               <button class="btn" onclick="triggerPrint()">인쇄</button>
             </div>
 
+          <button class="btn viewer-only" onclick="exportScheduleAsExcel()">엑셀</button>
           <button class="btn viewer-only" onclick="triggerPrint()">인쇄</button>
           <button class="btn" id="adminAuthBtn" onclick="handleAdminAuth()">관리자 로그인</button>
         </div>
@@ -107,6 +109,10 @@
 
       <div id="view-employees" class="panel hidden admin-only">
         <div class="form-row">
+          <div class="field">
+            <label>사번</label>
+            <input id="empEmployeeNo" type="text" placeholder="예: L20089" />
+          </div>
           <div class="field">
             <label>이름</label>
             <input id="empName" type="text" placeholder="직원 이름" />

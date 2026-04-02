@@ -1076,6 +1076,224 @@
     return _html2canvasLoader;
   }
 
+  let _excelJsLoader = null;
+  function loadExcelJs(){
+    if(window.ExcelJS) return Promise.resolve(window.ExcelJS);
+    if(_excelJsLoader) return _excelJsLoader;
+    _excelJsLoader = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
+      script.onload = () => resolve(window.ExcelJS);
+      script.onerror = () => reject(new Error('엑셀 저장 도구를 불러오지 못했어.'));
+      document.head.appendChild(script);
+    });
+    return _excelJsLoader;
+  }
+
+  function getExcelEmployees(){
+    const selected = getSelectedEmployee();
+    return selected ? [selected] : [...state.employees];
+  }
+
+  function getStandardWorkableDays(year, month){
+    const days = getDays(year, month);
+    let workable = 0;
+    for(let d = 1; d <= days; d++){
+      const dateKey = dKey(year, month, d);
+      const dow = parseDateKey(dateKey).getDay();
+      if(dow === 0) continue;
+      if(state.holidays?.[dateKey] || state.subHolidays?.[dateKey]) continue;
+      workable++;
+    }
+    return workable;
+  }
+
+  function getPrimaryLeaveCategory(entry){
+    const tags = Array.isArray(entry?.tags) ? entry.tags : [];
+    if(tags.find(tag => /^대휴\(/.test(tag))) return '대체';
+    if(tags.includes('연차')) return '연차';
+    if(tags.includes('반차')) return '반차';
+    if(tags.includes('교육&학회')) return '공가';
+    if(tags.includes('희망휴무')) return '희망휴무';
+    if(tags.includes('여름휴가')) return '연차';
+    if(tags.includes('검체관리')) return '검체관리';
+    if(tags.includes('주간지원')) return '주간지원';
+    if(tags.includes('야간지원')) return '야간지원';
+    return '';
+  }
+
+  function getExcelDayCode(emp, dateKey, entry){
+    const leaveType = getPrimaryLeaveCategory(entry);
+    if(leaveType === '대체') return '대';
+    if(leaveType === '연차') return '연';
+    if(leaveType === '반차') return '반';
+    if(leaveType === '공가') return '공';
+    if(entry?.shift === '조출' || entry?.shift === '주간') return '주';
+    if(entry?.shift === '야간'){
+      const dow = parseDateKey(dateKey).getDay();
+      const isHoliday = !!state.holidays?.[dateKey] || !!state.subHolidays?.[dateKey];
+      return (dow === 0 || dow === 6 || isHoliday) ? 'C' : 'A';
+    }
+    if(leaveType === '희망휴무' || leaveType === '검체관리' || leaveType === '주간지원' || leaveType === '야간지원') return '휴';
+    return '휴';
+  }
+
+  function buildExcelNotes(dateKey, entry, emp){
+    const parts = [];
+    const tags = Array.isArray(entry?.tags) ? entry.tags : [];
+    if(tags.length) parts.push(`${parseDateKey(dateKey).getDate()}일 ${tags.join(', ')}`);
+
+    const defaultEntry = createDefaultEntry(emp, dateKey);
+    if(entry?.shift && entry.shift !== defaultEntry.shift){
+      parts.push(`${parseDateKey(dateKey).getDate()}일 ${defaultEntry.shift}→${entry.shift}`);
+    }
+
+    return parts;
+  }
+
+  function buildExcelEmployeeMetrics(emp, year, month){
+    const days = getDays(year, month);
+    const leaveCounts = { 대체: 0, 연차: 0, 경조: 0, 코로나: 0, 공가: 0 };
+    const dayCodes = [];
+    const reasonParts = [];
+
+    for(let d = 1; d <= days; d++){
+      const dateKey = dKey(year, month, d);
+      const entry = getEntry(emp.id, dateKey);
+      const leaveType = getPrimaryLeaveCategory(entry);
+      dayCodes.push(getExcelDayCode(emp, dateKey, entry));
+      reasonParts.push(...buildExcelNotes(dateKey, entry, emp));
+
+      if(leaveType === '대체') leaveCounts.대체++;
+      else if(leaveType === '연차') leaveCounts.연차++;
+      else if(leaveType === '경조') leaveCounts.경조++;
+      else if(leaveType === '코로나') leaveCounts.코로나++;
+      else if(leaveType === '공가') leaveCounts.공가++;
+    }
+
+    return {
+      dayCodes,
+      leaveCounts,
+      notes: reasonParts.join(' / ')
+    };
+  }
+
+  async function loadExcelTemplateWorkbook(){
+    const ExcelJS = await loadExcelJs();
+    const res = await fetch('./schedule-report-template.xlsx');
+    if(!res.ok) throw new Error('보고 양식 템플릿 파일을 찾지 못했어.');
+    const buffer = await res.arrayBuffer();
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer);
+    workbook.creator = '검사실 근무표 스케줄러';
+    workbook.created = new Date();
+    workbook.calcProperties.fullCalcOnLoad = true;
+    workbook.calcProperties.forceFullCalc = true;
+    return workbook;
+  }
+
+  function getExcelTemplateWorksheet(workbook){
+    return workbook.getWorksheet('12월 취합 (야간근무+연장)') || workbook.worksheets[0];
+  }
+
+  function clearTemplateRow(worksheet, rowNumber){
+    for(let column = 1; column <= 5; column++){
+      worksheet.getCell(rowNumber, column).value = null;
+    }
+    for(let column = 6; column <= 36; column++){
+      worksheet.getCell(rowNumber, column).value = null;
+    }
+    worksheet.getCell(rowNumber, 38).value = null;
+    worksheet.getCell(rowNumber, 55).value = null;
+  }
+
+  function getEmployeeReportCode(emp){
+    if(emp.employeeNo) return emp.employeeNo;
+    if(emp.code) return emp.code;
+    return `L${String(emp.id).padStart(5, '0')}`;
+  }
+
+  function readEmployeeNo(inputId){
+    const value = document.getElementById(inputId)?.value || '';
+    return value.trim();
+  }
+
+  async function exportScheduleAsExcel(){
+    ensureScheduleForMonth(state.year, state.month);
+
+    try{
+      const workbook = await loadExcelTemplateWorkbook();
+      const worksheet = getExcelTemplateWorksheet(workbook);
+      workbook.worksheets.slice().forEach(sheet => {
+        if(sheet.id !== worksheet.id) workbook.removeWorksheet(sheet.id);
+      });
+
+      worksheet.name = `${state.month}월 취합`;
+      worksheet.views = [{ state: 'frozen', xSplit: 5, ySplit: 7 }];
+
+      const employees = getExcelEmployees();
+      const days = getDays(state.year, state.month);
+      const firstEmployeeRow = 8;
+      const lastEmployeeRow = 49;
+      if(employees.length > (lastEmployeeRow - firstEmployeeRow + 1)){
+        throw new Error('보고 양식에 들어갈 직원 수를 초과했어.');
+      }
+
+      const defaultRegion = worksheet.getCell('B8').text || '광주';
+      const defaultDepartment = worksheet.getCell('C8').text || '분자미생물학팀';
+
+      worksheet.getCell('F3').value = state.month;
+      worksheet.getCell('K3').value = getStandardWorkableDays(state.year, state.month);
+      worksheet.getCell('N3').value = '기준\n일수\n(8hr)';
+      worksheet.getCell('P3').value = '';
+      worksheet.getCell('AL7').value = '개인 기준 \n(8hr)';
+
+      for(let column = 6; column <= 36; column++){
+        worksheet.getCell(7, column).value = null;
+      }
+      for(let d = 1; d <= days; d++){
+        worksheet.getCell(7, 5 + d).value = d;
+      }
+
+      for(let rowNumber = firstEmployeeRow; rowNumber <= lastEmployeeRow; rowNumber++){
+        clearTemplateRow(worksheet, rowNumber);
+      }
+
+      employees.forEach((emp, index) => {
+        const rowNumber = firstEmployeeRow + index;
+        const metrics = buildExcelEmployeeMetrics(emp, state.year, state.month);
+        worksheet.getCell(`A${rowNumber}`).value = index + 1;
+        worksheet.getCell(`B${rowNumber}`).value = emp.region || defaultRegion;
+        worksheet.getCell(`C${rowNumber}`).value = emp.department || defaultDepartment;
+        worksheet.getCell(`D${rowNumber}`).value = getEmployeeReportCode(emp);
+        worksheet.getCell(`E${rowNumber}`).value = emp.name;
+        worksheet.getCell(`AL${rowNumber}`).value = '';
+        worksheet.getCell(`BC${rowNumber}`).value = metrics.notes || '';
+
+        metrics.dayCodes.forEach((code, dayIndex) => {
+          worksheet.getCell(rowNumber, 6 + dayIndex).value = code;
+        });
+      });
+
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob(
+        [buffer],
+        { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+      );
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `근무표_${state.year}-${String(state.month).padStart(2, '0')}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }catch(e){
+      console.error(e);
+      alert(e.message || '엑셀 내보내기에 실패했어.');
+    }
+  }
+
   async function exportCalendarAsPng(){
     const view = document.getElementById('view-calendar');
     if(!view){
@@ -1196,6 +1414,7 @@
       <thead>
         <tr>
           <th style="width:80px">ID</th>
+          <th style="width:140px">사번</th>
           <th>이름</th>
           <th style="width:120px">기본 근무</th>
           <th style="width:220px">관리</th>
@@ -1208,6 +1427,7 @@
       html += `
         <tr>
           <td>${emp.id}</td>
+          <td>${emp.employeeNo || ''}</td>
           <td>${emp.name}</td>
           <td>${emp.role}</td>
           <td>
@@ -2257,6 +2477,7 @@
 
   function addEmployee(){
     if(!requireAdmin()) return;
+    const employeeNo = readEmployeeNo('empEmployeeNo');
     const name = document.getElementById('empName').value.trim();
     const role = document.getElementById('empRole').value;
     if(!name){
@@ -2264,8 +2485,9 @@
       return;
     }
     const id = state.employees.length ? Math.max(...state.employees.map(e=>e.id)) + 1 : 1;
-    state.employees.push({ id, name, role });
+    state.employees.push({ id, employeeNo, name, role });
     ensureScheduleForMonth(state.year, state.month);
+    document.getElementById('empEmployeeNo').value = '';
     document.getElementById('empName').value = '';
     saveState('직원 추가');
     renderAll();
@@ -2294,6 +2516,10 @@
 
       <div class="form-row">
         <div class="field">
+          <label>사번</label>
+          <input id="modalEmpEmployeeNo" type="text" value="${emp ? (emp.employeeNo || '') : ''}" placeholder="예: L20089" />
+        </div>
+        <div class="field">
           <label>이름</label>
           <input id="modalEmpName" type="text" value="${emp ? emp.name : ''}" />
         </div>
@@ -2316,6 +2542,7 @@
 
   function saveEmployeeCreate(){
     if(!requireAdmin()) return;
+    const employeeNo = readEmployeeNo('modalEmpEmployeeNo');
     const name = document.getElementById('modalEmpName').value.trim();
     const role = document.getElementById('modalEmpRole').value;
     if(!name){
@@ -2323,7 +2550,7 @@
       return;
     }
     const id = state.employees.length ? Math.max(...state.employees.map(e=>e.id)) + 1 : 1;
-    state.employees.push({ id, name, role });
+    state.employees.push({ id, employeeNo, name, role });
     ensureScheduleForMonth(state.year, state.month);
     refreshDefaultEntriesForMonth(state.year, state.month);
     saveState();
@@ -2333,6 +2560,7 @@
 
   function saveEmployeeEdit(empId){
     if(!requireAdmin()) return;
+    const employeeNo = readEmployeeNo('modalEmpEmployeeNo');
     const name = document.getElementById('modalEmpName').value.trim();
     const role = document.getElementById('modalEmpRole').value;
     if(!name){
@@ -2341,6 +2569,7 @@
     }
     const emp = state.employees.find(e=>e.id === empId);
     if(!emp) return;
+    emp.employeeNo = employeeNo;
     emp.name = name;
     emp.role = role;
     refreshDefaultEntriesForMonth(state.year, state.month);
