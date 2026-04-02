@@ -2476,7 +2476,7 @@
         </div>
       </div>
 
-      <div class="muted" style="margin-top:8px;font-size:12px;">초기 복구코드는 <strong>reset1234</strong> 이고, 로그인 후 설정에서 바꾸는 걸 추천해.</div>
+      <div class="muted" style="margin-top:8px;font-size:12px;">복구코드는 화면에 표시하지 않아. 운영 중 별도로 보관한 복구코드를 입력해줘.</div>
       <div id="recoverPwMsg" style="font-size:13px;margin-top:8px;min-height:20px;"></div>
 
       <div class="modal-actions">

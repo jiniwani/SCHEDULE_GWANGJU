@@ -16,7 +16,8 @@ const D1_META_RECOVERY_HASH = 'recovery_hash';
 const D1_META_SESSION_VERSION = 'session_version';
 
 const DEFAULT_SUPER_ADMIN_HASH = '03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4';
-const DEFAULT_RECOVERY_HASH = '41963f0d8ff4ff516d17df3f4d40e2683955f1c632dda298c4a39edb4f8090dd';
+const LEGACY_BROKEN_RECOVERY_HASH = '41963f0d8ff4ff516d17df3f4d40e2683955f1c632dda298c4a39edb4f8090dd';
+const DEFAULT_RECOVERY_HASH = '6053f37205842f63fe11ceb14b810bec05f1547a0f7a4f43d9abe1ee8691dcdd';
 const DEFAULT_TEAM_VIEWER_HASH = '0ffe1abd1a08215353c233d6e009613e95eec4253832a761af28ff37ac5a150c';
 let storageReadyPromise = null;
 
@@ -75,7 +76,7 @@ async function getStoredSuperAdminHashFromKv(env) {
 
 async function getStoredRecoveryHashFromKv(env) {
   const hash = await env.SCHEDULER_KV.get(RECOVERY_HASH_KEY, KV_READ_OPTIONS);
-  return hash || DEFAULT_RECOVERY_HASH;
+  return normalizeRecoveryHash(hash);
 }
 
 async function getSessionVersionFromKv(env) {
@@ -103,6 +104,12 @@ async function setD1MetaValue(env, key, value) {
     )
     .bind(key, String(value ?? ''))
     .run();
+}
+
+function normalizeRecoveryHash(hash) {
+  if (!hash) return DEFAULT_RECOVERY_HASH;
+  if (hash === LEGACY_BROKEN_RECOVERY_HASH) return DEFAULT_RECOVERY_HASH;
+  return hash;
 }
 
 function readBearerToken(request) {
@@ -468,7 +475,7 @@ async function setStoredSuperAdminHash(env, value) {
 async function getStoredRecoveryHash(env) {
   if (hasD1Storage(env)) {
     await ensureStorageReady(env);
-    return (await getD1MetaValue(env, D1_META_RECOVERY_HASH)) || DEFAULT_RECOVERY_HASH;
+    return normalizeRecoveryHash(await getD1MetaValue(env, D1_META_RECOVERY_HASH));
   }
   return getStoredRecoveryHashFromKv(env);
 }
