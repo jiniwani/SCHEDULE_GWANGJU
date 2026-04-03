@@ -1480,6 +1480,8 @@ table.basic th{
 
   .tag-연차{ background:#fde68a !important; color:#7c2d12 !important; border-color:#fcd34d !important; }
   .tag-반차{ background:#fdba74 !important; color:#7c2d12 !important; border-color:#fb923c !important; }
+  .tag-경조{ background:#fde2e8 !important; color:#9d174d !important; border-color:#f9a8d4 !important; }
+  .tag-코로나{ background:#cffafe !important; color:#155e75 !important; border-color:#67e8f9 !important; }
   .tag-교육학회{ background:#bbf7d0 !important; color:#166534 !important; border-color:#86efac !important; }
   .tag-당직{ background:#fecdd3 !important; color:#9f1239 !important; border-color:#fda4af !important; }
   .tag-대휴custom{ background:#fecaca !important; color:#991b1b !important; border-color:#fca5a5 !important; }

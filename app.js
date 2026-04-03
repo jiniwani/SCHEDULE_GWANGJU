@@ -3,6 +3,8 @@
   const TAGS = [
     '연차',
     '반차',
+    '경조',
+    '코로나',
     '교육&학회',
     '당직',
     '희망휴무',
@@ -1221,6 +1223,8 @@
     if(tags.find(tag => /^대휴\(/.test(tag))) return '대체';
     if(tags.includes('연차')) return '연차';
     if(tags.includes('반차')) return '반차';
+    if(tags.includes('경조')) return '경조';
+    if(tags.includes('코로나')) return '코로나';
     if(tags.includes('교육&학회')) return '공가';
     if(tags.includes('희망휴무')) return '희망휴무';
     if(tags.includes('여름휴가')) return '연차';
@@ -1235,6 +1239,8 @@
     if(leaveType === '대체') return '대';
     if(leaveType === '연차') return '연';
     if(leaveType === '반차') return '반';
+    if(leaveType === '경조') return '경';
+    if(leaveType === '코로나') return '코';
     if(leaveType === '공가') return '공';
     if(entry?.shift === '조출' || entry?.shift === '주간') return '주';
     if(entry?.shift === '야간'){
@@ -1294,8 +1300,30 @@
     return XlsxPopulate.fromDataAsync(buffer);
   }
 
-  function getExcelTemplateWorksheet(workbook){
+  function getExcelTemplateWorksheets(workbook){
+    const sheets = workbook.sheets();
+    return sheets.length ? sheets : [];
+  }
+
+  function getExcelHeaderStyleTemplateWorksheet(workbook){
     return workbook.sheet('12월 취합 (야간근무+연장)') || workbook.sheets()[0];
+  }
+
+  function getExcelTemplateStandardDays(workbook){
+    const sheets = getExcelTemplateWorksheets(workbook);
+    for(const sheet of sheets){
+      const topValue = sheet.cell('P3').value();
+      if(topValue !== undefined && topValue !== null && String(topValue).trim() !== ''){
+        return topValue;
+      }
+      for(let rowNumber = 8; rowNumber <= 49; rowNumber++){
+        const rowValue = sheet.cell(`AL${rowNumber}`).value();
+        if(rowValue !== undefined && rowValue !== null && String(rowValue).trim() !== ''){
+          return rowValue;
+        }
+      }
+    }
+    return '';
   }
 
   function clearTemplateRow(worksheet, rowNumber){
@@ -1320,12 +1348,87 @@
     return value.trim();
   }
 
+  function applyExcelDayHeaders(worksheet, styleWorksheet, year, month){
+    const days = getDays(year, month);
+    const weekdayStyle = styleWorksheet.cell('G7').style();
+    const saturdayStyle = styleWorksheet.cell('H7').style();
+    const sundayStyle = styleWorksheet.cell('I7').style();
+
+    for(let column = 6; column <= 36; column++){
+      const cell = worksheet.cell(`${excelColumnName(column)}7`);
+      const dayNumber = column - 5;
+      if(dayNumber > days){
+        cell.value('');
+        cell.style(weekdayStyle);
+        continue;
+      }
+
+      const date = parseDateKey(dKey(year, month, dayNumber));
+      const dow = date.getDay();
+      cell.value(dayNumber);
+      if(dow === 6){
+        cell.style(saturdayStyle);
+      }else if(dow === 0){
+        cell.style(sundayStyle);
+      }else{
+        cell.style(weekdayStyle);
+      }
+    }
+  }
+
+  function populateExcelTemplateWorksheet(worksheet, options){
+    const {
+      employees,
+      days,
+      firstEmployeeRow,
+      lastEmployeeRow,
+      defaultRegion,
+      defaultDepartment,
+      standardWorkableDays,
+      reportStandardDays,
+      headerStyleWorksheet
+    } = options;
+
+    worksheet.cell('F3').value(state.month);
+    worksheet.cell('K3').value(standardWorkableDays);
+    worksheet.cell('C3').value(`${state.teamMeta?.location || '광주호남검사센터'}\n${defaultDepartment} (${state.teamMeta?.workType || '주 5일제'})`);
+    worksheet.cell('N3').value(`기준\n일수\n(${state.teamMeta?.standardHours || '8hr'})`);
+    worksheet.cell('P3').value(reportStandardDays);
+    worksheet.cell('AL7').value(`개인 기준 \n(${state.teamMeta?.standardHours || '8hr'})`);
+
+    applyExcelDayHeaders(worksheet, headerStyleWorksheet, state.year, state.month);
+
+    for(let rowNumber = firstEmployeeRow; rowNumber <= lastEmployeeRow; rowNumber++){
+      clearTemplateRow(worksheet, rowNumber);
+    }
+
+    employees.forEach((emp, index) => {
+      const rowNumber = firstEmployeeRow + index;
+      const metrics = buildExcelEmployeeMetrics(emp, state.year, state.month);
+      worksheet.cell(`A${rowNumber}`).value(index + 1);
+      worksheet.cell(`B${rowNumber}`).value(emp.region || defaultRegion);
+      worksheet.cell(`C${rowNumber}`).value(emp.department || defaultDepartment);
+      worksheet.cell(`D${rowNumber}`).value(getEmployeeReportCode(emp));
+      worksheet.cell(`E${rowNumber}`).value(emp.name);
+      worksheet.cell(`AL${rowNumber}`).value(reportStandardDays);
+      worksheet.cell(`BC${rowNumber}`).value(metrics.notes || '');
+
+      metrics.dayCodes.forEach((code, dayIndex) => {
+        if(dayIndex >= days) return;
+        worksheet.cell(`${excelColumnName(6 + dayIndex)}${rowNumber}`).value(code);
+      });
+    });
+  }
+
   async function exportScheduleAsExcel(){
     ensureScheduleForMonth(state.year, state.month);
 
     try{
       const workbook = await loadExcelTemplateWorkbook();
-      const worksheet = getExcelTemplateWorksheet(workbook);
+      const worksheets = getExcelTemplateWorksheets(workbook);
+      if(!worksheets.length){
+        throw new Error('엑셀 템플릿 시트를 찾지 못했어.');
+      }
 
       const employees = getExcelEmployees();
       const days = getDays(state.year, state.month);
@@ -1335,40 +1438,24 @@
         throw new Error('보고 양식에 들어갈 직원 수를 초과했어.');
       }
 
-      const defaultRegion = state.teamMeta?.region || worksheet.cell('B8').value() || '광주';
-      const defaultDepartment = state.teamMeta?.department || worksheet.cell('C8').value() || '분자미생물학팀';
+      const baseWorksheet = worksheets[0];
+      const headerStyleWorksheet = getExcelHeaderStyleTemplateWorksheet(workbook);
+      const defaultRegion = state.teamMeta?.region || baseWorksheet.cell('B8').value() || '광주';
+      const defaultDepartment = state.teamMeta?.department || baseWorksheet.cell('C8').value() || '분자미생물학팀';
+      const standardWorkableDays = getStandardWorkableDays(state.year, state.month);
+      const reportStandardDays = getExcelTemplateStandardDays(workbook);
 
-      worksheet.cell('F3').value(state.month);
-      worksheet.cell('K3').value(getStandardWorkableDays(state.year, state.month));
-      worksheet.cell('C3').value(`${state.teamMeta?.location || '광주호남검사센터'}\n${defaultDepartment} (${state.teamMeta?.workType || '주 5일제'})`);
-      worksheet.cell('N3').value(`기준\n일수\n(${state.teamMeta?.standardHours || '8hr'})`);
-      worksheet.cell('P3').value('');
-      worksheet.cell('AL7').value(`개인 기준 \n(${state.teamMeta?.standardHours || '8hr'})`);
-
-      for(let column = 6; column <= 36; column++){
-        worksheet.cell(`${excelColumnName(column)}7`).value('');
-      }
-      for(let d = 1; d <= days; d++){
-        worksheet.cell(`${excelColumnName(5 + d)}7`).value(d);
-      }
-
-      for(let rowNumber = firstEmployeeRow; rowNumber <= lastEmployeeRow; rowNumber++){
-        clearTemplateRow(worksheet, rowNumber);
-      }
-
-      employees.forEach((emp, index) => {
-        const rowNumber = firstEmployeeRow + index;
-        const metrics = buildExcelEmployeeMetrics(emp, state.year, state.month);
-        worksheet.cell(`A${rowNumber}`).value(index + 1);
-        worksheet.cell(`B${rowNumber}`).value(emp.region || defaultRegion);
-        worksheet.cell(`C${rowNumber}`).value(emp.department || defaultDepartment);
-        worksheet.cell(`D${rowNumber}`).value(getEmployeeReportCode(emp));
-        worksheet.cell(`E${rowNumber}`).value(emp.name);
-        worksheet.cell(`AL${rowNumber}`).value('');
-        worksheet.cell(`BC${rowNumber}`).value(metrics.notes || '');
-
-        metrics.dayCodes.forEach((code, dayIndex) => {
-          worksheet.cell(`${excelColumnName(6 + dayIndex)}${rowNumber}`).value(code);
+      worksheets.forEach((worksheet) => {
+        populateExcelTemplateWorksheet(worksheet, {
+          employees,
+          days,
+          firstEmployeeRow,
+          lastEmployeeRow,
+          defaultRegion,
+          defaultDepartment,
+          standardWorkableDays,
+          reportStandardDays,
+          headerStyleWorksheet
         });
       });
 
