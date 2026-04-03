@@ -1181,11 +1181,47 @@ table.basic th{
     min-width:0;
   }
 
+  .tag-setting-fields{
+    display:flex;
+    align-items:center;
+    justify-content:flex-end;
+    gap:10px;
+    flex-wrap:wrap;
+  }
+
+  .tag-setting-name{
+    width:140px;
+    min-width:140px;
+  }
+
+  .tag-setting-export{
+    min-width:120px;
+  }
+
   .tag-setting-color-wrap{
     display:flex;
     align-items:center;
     gap:8px;
     white-space:nowrap;
+  }
+
+  .tag-setting-order{
+    display:flex;
+    align-items:center;
+    gap:6px;
+  }
+
+  .tag-setting-lock{
+    display:inline-flex;
+    align-items:center;
+    height:34px;
+    padding:0 10px;
+    border-radius:999px;
+    background:#f1f5f9;
+    border:1px solid #cbd5e1;
+    color:#475569;
+    font-size:12px;
+    font-weight:700;
   }
 
   .tag-setting-hex{
@@ -1201,9 +1237,24 @@ table.basic th{
       align-items:flex-start;
     }
 
-    .tag-setting-color-wrap{
+    .tag-setting-fields{
       width:100%;
       justify-content:space-between;
+    }
+
+    .tag-setting-name{
+      width:100%;
+      min-width:0;
+    }
+
+    .tag-setting-export{
+      width:100%;
+      min-width:0;
+    }
+
+    .tag-setting-color-wrap{
+      width:100%;
+      justify-content:flex-start;
     }
   }
 

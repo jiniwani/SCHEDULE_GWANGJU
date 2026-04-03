@@ -27,6 +27,43 @@ const TEAM_TAGS = [
   '주간지원',
   '야간지원',
 ];
+const DEFAULT_TAG_LABELS = TEAM_TAGS.reduce((acc, tag) => {
+  acc[tag] = tag;
+  return acc;
+}, {});
+const DEFAULT_TAG_EXPORTS = {
+  '연차': '연차',
+  '반차': '반차',
+  '경조': '경조',
+  '코로나': '코로나',
+  '교육&학회': '공가',
+  '당직': '',
+  '희망휴무': '휴무',
+  '검체관리': '휴무',
+  '여름휴가': '연차',
+  '주간지원': '휴무',
+  '야간지원': '휴무',
+};
+const TAG_EXPORT_VALUES = new Set(['', '연차', '반차', '경조', '코로나', '공가', '휴무']);
+const LOCKED_TAG_NAME_IDS = new Set([
+  '연차',
+  '반차',
+  '경조',
+  '코로나',
+  '교육&학회',
+  '희망휴무',
+  '검체관리',
+  '여름휴가',
+  '주간지원',
+  '야간지원',
+]);
+const LOCKED_TAG_EXPORT_IDS = new Set([
+  '연차',
+  '반차',
+  '경조',
+  '코로나',
+  '교육&학회',
+]);
 const DEFAULT_TAG_COLORS = {
   '연차': '#fde68a',
   '반차': '#fdba74',
@@ -99,6 +136,53 @@ function normalizeTagColors(colors, fallback = DEFAULT_TAG_COLORS) {
     acc[tag] = normalizeHexColor(safeColors[tag], normalizeHexColor(safeFallback[tag], DEFAULT_TAG_COLORS[tag]));
     return acc;
   }, {});
+}
+
+function normalizeTagSettings(tagSettings, fallback = {}) {
+  const legacyEnabled = Array.isArray(fallback.enabledTags) ? fallback.enabledTags : TEAM_TAGS;
+  const legacyColors = fallback.tagColors && typeof fallback.tagColors === 'object' ? fallback.tagColors : {};
+  const source = Array.isArray(tagSettings) && tagSettings.length
+    ? tagSettings
+    : TEAM_TAGS.map(tag => ({
+        id: tag,
+        label: DEFAULT_TAG_LABELS[tag],
+        color: normalizeHexColor(legacyColors[tag], DEFAULT_TAG_COLORS[tag]),
+        enabled: legacyEnabled.includes(tag),
+        exportAs: DEFAULT_TAG_EXPORTS[tag],
+      }));
+
+  const seen = new Set();
+  const ordered = [];
+
+  source.forEach(item => {
+    const id = String(item?.id || '').trim();
+    if (!TEAM_TAGS.includes(id) || seen.has(id)) return;
+    seen.add(id);
+    ordered.push({
+      id,
+      label: LOCKED_TAG_NAME_IDS.has(id)
+        ? DEFAULT_TAG_LABELS[id]
+        : (String(item?.label || DEFAULT_TAG_LABELS[id]).trim() || DEFAULT_TAG_LABELS[id]),
+      color: normalizeHexColor(item?.color, normalizeHexColor(legacyColors[id], DEFAULT_TAG_COLORS[id])),
+      enabled: item?.enabled !== false,
+      exportAs: LOCKED_TAG_EXPORT_IDS.has(id)
+        ? DEFAULT_TAG_EXPORTS[id]
+        : (TAG_EXPORT_VALUES.has(item?.exportAs) ? item.exportAs : DEFAULT_TAG_EXPORTS[id]),
+    });
+  });
+
+  TEAM_TAGS.forEach(tag => {
+    if (seen.has(tag)) return;
+    ordered.push({
+      id: tag,
+      label: DEFAULT_TAG_LABELS[tag],
+      color: normalizeHexColor(legacyColors[tag], DEFAULT_TAG_COLORS[tag]),
+      enabled: legacyEnabled.includes(tag),
+      exportAs: DEFAULT_TAG_EXPORTS[tag],
+    });
+  });
+
+  return ordered;
 }
 
 async function getD1MetaValue(env, key) {
@@ -245,9 +329,12 @@ function createDefaultTeamState(overrides = {}) {
 
 function normalizeTeam(team, index = 0) {
   const safe = team && typeof team === 'object' ? { ...team } : {};
-  const fallbackEnabledTags = safe.enabledTags || TEAM_TAGS;
-  const enabledTags = normalizeEnabledTags(safe.enabledTags, fallbackEnabledTags);
-  const tagColors = normalizeTagColors(safe.tagColors, DEFAULT_TAG_COLORS);
+  const tagSettings = normalizeTagSettings(safe.tagSettings, safe);
+  const enabledTags = tagSettings.filter(item => item.enabled).map(item => item.id);
+  const tagColors = tagSettings.reduce((acc, item) => {
+    acc[item.id] = item.color;
+    return acc;
+  }, {});
   return {
     id: safe.id || `team-${index + 1}`,
     name: safe.name || `팀 ${index + 1}`,
@@ -258,6 +345,7 @@ function normalizeTeam(team, index = 0) {
     standardHours: safe.standardHours || '8시간',
     adminPasswordHash: safe.adminPasswordHash || DEFAULT_SUPER_ADMIN_HASH,
     viewerPasswordHash: safe.viewerPasswordHash || DEFAULT_TEAM_VIEWER_HASH,
+    tagSettings,
     enabledTags: enabledTags.length ? enabledTags : [...TEAM_TAGS],
     tagColors,
     data: normalizeTeamState(safe.data),
@@ -533,6 +621,7 @@ function findTeamIndex(root, teamId) {
 }
 
 function getPublicTeam(team) {
+  const tagSettings = normalizeTagSettings(team.tagSettings, team);
   return {
     id: team.id,
     name: team.name,
@@ -541,8 +630,12 @@ function getPublicTeam(team) {
     department: team.department,
     workType: team.workType,
     standardHours: team.standardHours,
-    enabledTags: normalizeEnabledTags(team.enabledTags, TEAM_TAGS),
-    tagColors: normalizeTagColors(team.tagColors, DEFAULT_TAG_COLORS),
+    tagSettings,
+    enabledTags: tagSettings.filter(item => item.enabled).map(item => item.id),
+    tagColors: tagSettings.reduce((acc, item) => {
+      acc[item.id] = item.color;
+      return acc;
+    }, {}),
   };
 }
 
@@ -627,6 +720,11 @@ function createTeamId() {
 }
 
 function buildTeamMetaFromInput(input = {}, fallback = {}) {
+  const tagSettings = normalizeTagSettings(input.tagSettings, {
+    ...fallback,
+    enabledTags: normalizeEnabledTags(input.enabledTags, fallback.enabledTags || TEAM_TAGS),
+    tagColors: normalizeTagColors(input.tagColors, fallback.tagColors || DEFAULT_TAG_COLORS),
+  });
   return {
     name: String(input.name || fallback.name || '').trim() || '새 팀',
     region: String(input.region || fallback.region || '광주').trim() || '광주',
@@ -634,8 +732,12 @@ function buildTeamMetaFromInput(input = {}, fallback = {}) {
     department: String(input.department || fallback.department || input.name || '새 팀').trim() || '새 팀',
     workType: String(input.workType || fallback.workType || '주 5일제').trim() || '주 5일제',
     standardHours: String(input.standardHours || fallback.standardHours || '8시간').trim() || '8시간',
-    enabledTags: normalizeEnabledTags(input.enabledTags, fallback.enabledTags || TEAM_TAGS),
-    tagColors: normalizeTagColors(input.tagColors, fallback.tagColors || DEFAULT_TAG_COLORS),
+    tagSettings,
+    enabledTags: tagSettings.filter(item => item.enabled).map(item => item.id),
+    tagColors: tagSettings.reduce((acc, item) => {
+      acc[item.id] = item.color;
+      return acc;
+    }, {}),
   };
 }
 
@@ -655,7 +757,12 @@ async function handleUpdateTeamSettings(request, env) {
   const activeTeam = resolveActiveTeam(root, sessionResult.session, request, body);
   if (!activeTeam) return cors(json({ error: '팀을 찾지 못했어.' }, 404));
 
-  const enabledTags = normalizeEnabledTags(body.enabledTags, activeTeam.enabledTags || TEAM_TAGS);
+  const tagSettings = normalizeTagSettings(body.tagSettings, {
+    ...activeTeam,
+    enabledTags: normalizeEnabledTags(body.enabledTags, activeTeam.enabledTags || TEAM_TAGS),
+    tagColors: normalizeTagColors(body.tagColors, activeTeam.tagColors || DEFAULT_TAG_COLORS),
+  });
+  const enabledTags = tagSettings.filter(item => item.enabled).map(item => item.id);
   if (!enabledTags.length) {
     return cors(json({ error: '최소 1개 태그는 선택해줘.' }, 400));
   }
@@ -665,8 +772,12 @@ async function handleUpdateTeamSettings(request, env) {
 
   root.teams[teamIndex] = {
     ...root.teams[teamIndex],
+    tagSettings,
     enabledTags,
-    tagColors: normalizeTagColors(body.tagColors, root.teams[teamIndex].tagColors || DEFAULT_TAG_COLORS),
+    tagColors: tagSettings.reduce((acc, item) => {
+      acc[item.id] = item.color;
+      return acc;
+    }, {}),
   };
 
   await saveRootState(env, root);

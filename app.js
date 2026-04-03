@@ -24,6 +24,7 @@
   let restorePreviewSnapshotId = null;
   let teamManagerCache = [];
   let editingTeamConfigId = null;
+  let editingTagSettings = null;
 
   let state = {
     year: 2026,
@@ -94,6 +95,53 @@
     '야간지원': '#bfdbfe'
   };
 
+  const TAG_LABEL_DEFAULTS = TAGS.reduce((acc, tag) => {
+    acc[tag] = tag;
+    return acc;
+  }, {});
+  const TAG_EXPORT_DEFAULTS = {
+    '연차': '연차',
+    '반차': '반차',
+    '경조': '경조',
+    '코로나': '코로나',
+    '교육&학회': '공가',
+    '당직': '',
+    '희망휴무': '휴무',
+    '검체관리': '휴무',
+    '여름휴가': '연차',
+    '주간지원': '휴무',
+    '야간지원': '휴무'
+  };
+  const TAG_EXPORT_OPTIONS = [
+    { value: '', label: '기본근무 유지' },
+    { value: '연차', label: '연차' },
+    { value: '반차', label: '반차' },
+    { value: '경조', label: '경조' },
+    { value: '코로나', label: '코로나' },
+    { value: '공가', label: '공가' },
+    { value: '휴무', label: '휴무' }
+  ];
+
+  const LOCKED_TAG_NAME_IDS = new Set([
+    '연차',
+    '반차',
+    '경조',
+    '코로나',
+    '교육&학회',
+    '희망휴무',
+    '검체관리',
+    '여름휴가',
+    '주간지원',
+    '야간지원'
+  ]);
+  const LOCKED_TAG_EXPORT_IDS = new Set([
+    '연차',
+    '반차',
+    '경조',
+    '코로나',
+    '교육&학회'
+  ]);
+
   function clamp(v, min, max){
     return Math.max(min, Math.min(max, v));
   }
@@ -137,23 +185,98 @@
     return '#ffffff';
   }
 
-  function normalizeTagColorMap(colors){
-    const safe = colors && typeof colors === 'object' ? colors : {};
-    return TAGS.reduce((acc, tag) => {
-      acc[tag] = normalizeHexColor(safe[tag], TAG_COLOR_DEFAULTS[tag]);
+  function buildDefaultTagSettings(meta = null){
+    const fallbackEnabled = Array.isArray(meta?.enabledTags) ? meta.enabledTags : TAGS;
+    const fallbackColors = meta?.tagColors && typeof meta.tagColors === 'object' ? meta.tagColors : {};
+    return TAGS.map(tag => ({
+      id: tag,
+      label: TAG_LABEL_DEFAULTS[tag],
+      color: normalizeHexColor(fallbackColors[tag], TAG_COLOR_DEFAULTS[tag]),
+      enabled: fallbackEnabled.includes(tag)
+    }));
+  }
+
+  function normalizeTagSettings(tagSettings, meta = null){
+    const source = Array.isArray(tagSettings) && tagSettings.length ? tagSettings : buildDefaultTagSettings(meta);
+    const seen = new Set();
+    const ordered = [];
+
+    source.forEach(item => {
+      const id = String(item?.id || '').trim();
+      if(!TAGS.includes(id) || seen.has(id)) return;
+      seen.add(id);
+      ordered.push({
+        id,
+        label: String(item?.label || TAG_LABEL_DEFAULTS[id]).trim() || TAG_LABEL_DEFAULTS[id],
+        color: normalizeHexColor(item?.color, TAG_COLOR_DEFAULTS[id]),
+        enabled: item?.enabled !== false,
+        exportAs: TAG_EXPORT_OPTIONS.some(option => option.value === item?.exportAs)
+          ? item.exportAs
+          : TAG_EXPORT_DEFAULTS[id]
+      });
+    });
+
+    TAGS.forEach(tag => {
+      if(seen.has(tag)) return;
+      ordered.push({
+        id: tag,
+        label: TAG_LABEL_DEFAULTS[tag],
+        color: TAG_COLOR_DEFAULTS[tag],
+        enabled: true,
+        exportAs: TAG_EXPORT_DEFAULTS[tag]
+      });
+    });
+
+    return ordered;
+  }
+
+  function getTagSettings(meta = state.teamMeta){
+    return normalizeTagSettings(meta?.tagSettings, meta);
+  }
+
+  function getTagSetting(tagId, meta = state.teamMeta){
+    return getTagSettings(meta).find(item => item.id === tagId) || {
+      id: tagId,
+      label: TAG_LABEL_DEFAULTS[tagId] || tagId,
+      color: TAG_COLOR_DEFAULTS[tagId] || '#e5e7eb',
+      enabled: true,
+      exportAs: TAG_EXPORT_DEFAULTS[tagId] || ''
+    };
+  }
+
+  function getTagLabel(tagId, meta = state.teamMeta){
+    if(/^대휴\(.+\)$/.test(tagId)) return tagId;
+    return getTagSetting(tagId, meta).label;
+  }
+
+  function isTagNameLocked(tagId){
+    return LOCKED_TAG_NAME_IDS.has(tagId);
+  }
+
+  function isTagExportLocked(tagId){
+    return LOCKED_TAG_EXPORT_IDS.has(tagId);
+  }
+
+  function formatTagLabels(tags = [], meta = state.teamMeta){
+    return (Array.isArray(tags) ? tags : []).map(tag => getTagLabel(tag, meta));
+  }
+
+  function getEnabledTags(meta = state.teamMeta){
+    return getTagSettings(meta).filter(item => item.enabled).map(item => item.id);
+  }
+
+  function getTagColorMap(meta = state.teamMeta){
+    return getTagSettings(meta).reduce((acc, item) => {
+      acc[item.id] = item.color;
       return acc;
     }, {});
   }
 
-  function getEnabledTags(meta = state.teamMeta){
-    if(Array.isArray(meta?.enabledTags)){
-      return TAGS.filter(tag => meta.enabledTags.includes(tag));
-    }
-    return [...TAGS];
-  }
-
-  function getTagColorMap(meta = state.teamMeta){
-    return normalizeTagColorMap(meta?.tagColors);
+  function getTagExportMap(meta = state.teamMeta){
+    return getTagSettings(meta).reduce((acc, item) => {
+      acc[item.id] = item.exportAs;
+      return acc;
+    }, {});
   }
 
   function getTagColorConfig(tag, meta = state.teamMeta){
@@ -171,7 +294,9 @@
   }
 
   function getPrimaryTag(tags = []){
-    return Array.isArray(tags) ? tags.find(tag => TAGS.includes(tag)) || '' : '';
+    if(!Array.isArray(tags)) return '';
+    const orderedIds = getTagSettings().map(item => item.id);
+    return orderedIds.find(tag => tags.includes(tag)) || '';
   }
 
   function getAvailableAssignmentTags(existingTags = []){
@@ -179,7 +304,7 @@
     (Array.isArray(existingTags) ? existingTags : []).forEach(tag => {
       if(TAGS.includes(tag)) enabled.add(tag);
     });
-    return TAGS.filter(tag => enabled.has(tag));
+    return getTagSettings().filter(item => enabled.has(item.id));
   }
 
   function ensureHighlightColors(){
@@ -957,8 +1082,9 @@
   function renderChip(item, dateKey, shift){
     const classes = item.entry.tags.map(normalizeTagClass).join(' ');
     const text = item.entry.tags.length
-      ? `${item.employee.name} (${item.entry.tags.join(', ')})`
+      ? `${item.employee.name} (${formatTagLabels(item.entry.tags).join(', ')})`
       : item.employee.name;
+    const safeText = escHtml(text);
     const base = shift === '야간' ? 'person-chip night-chip' : (shift === '휴무' ? 'off-chip' : 'person-chip');
     const focusClass = Number(state.selectedEmployeeId) === Number(item.employee.id) ? 'employee-focus' : '';
     const primaryTag = getPrimaryTag(item.entry.tags);
@@ -968,7 +1094,7 @@
          ondragstart="dragStart(event, ${item.employee.id}, '${dateKey}', '${shift}')"
          onclick="openAssignmentModal(${item.employee.id}, '${dateKey}')"
          title="클릭: 수정 / 드래그: 이동"`
-      : `draggable="false" title="${text}"`;
+      : `draggable="false" title="${safeText}"`;
 
     return `
       <button
@@ -976,7 +1102,7 @@
         style="${tagStyle}"
         ${clickable}
       >
-        ${text}
+        ${safeText}
       </button>
     `;
   }
@@ -1299,16 +1425,10 @@
   function getPrimaryLeaveCategory(entry){
     const tags = Array.isArray(entry?.tags) ? entry.tags : [];
     if(tags.find(tag => /^대휴\(/.test(tag))) return '대체';
-    if(tags.includes('연차')) return '연차';
-    if(tags.includes('반차')) return '반차';
-    if(tags.includes('경조')) return '경조';
-    if(tags.includes('코로나')) return '코로나';
-    if(tags.includes('교육&학회')) return '공가';
-    if(tags.includes('희망휴무')) return '희망휴무';
-    if(tags.includes('여름휴가')) return '연차';
-    if(tags.includes('검체관리')) return '검체관리';
-    if(tags.includes('주간지원')) return '주간지원';
-    if(tags.includes('야간지원')) return '야간지원';
+    const orderedTags = getTagSettings().map(item => item.id);
+    const exportMap = getTagExportMap();
+    const matched = orderedTags.find(tag => tags.includes(tag));
+    if(matched) return exportMap[matched] || '';
     return '';
   }
 
@@ -1320,20 +1440,20 @@
     if(leaveType === '경조') return '경';
     if(leaveType === '코로나') return '코';
     if(leaveType === '공가') return '공';
+    if(leaveType === '휴무') return '휴';
     if(entry?.shift === '조출' || entry?.shift === '주간') return '주';
     if(entry?.shift === '야간'){
       const dow = parseDateKey(dateKey).getDay();
       const isHoliday = !!state.holidays?.[dateKey] || !!state.subHolidays?.[dateKey];
       return (dow === 0 || dow === 6 || isHoliday) ? 'C' : 'A';
     }
-    if(leaveType === '희망휴무' || leaveType === '검체관리' || leaveType === '주간지원' || leaveType === '야간지원') return '휴';
     return '휴';
   }
 
   function buildExcelNotes(dateKey, entry, emp){
     const parts = [];
     const tags = Array.isArray(entry?.tags) ? entry.tags : [];
-    if(tags.length) parts.push(`${parseDateKey(dateKey).getDate()}일 ${tags.join(', ')}`);
+    if(tags.length) parts.push(`${parseDateKey(dateKey).getDate()}일 ${formatTagLabels(tags).join(', ')}`);
 
     const defaultEntry = createDefaultEntry(emp, dateKey);
     if(entry?.shift && entry.shift !== defaultEntry.shift){
@@ -2272,13 +2392,13 @@
   function renderTagLegend(){
     const wrap = document.getElementById('tagLegend');
     if(!wrap) return;
-    const enabledTags = getEnabledTags();
+    const enabledTags = getTagSettings().filter(item => item.enabled);
     const items = enabledTags.map(tag => `
       <div class="legend-item">
-        <span class="dot" style="${getTagStyle(tag)}"></span>${tag}
+        <span class="dot" style="${getTagStyle(tag.id)}"></span>${escHtml(tag.label)}
       </div>
     `);
-    items.splice(2, 0, `<div class="legend-item"><span class="dot" style="background:#fecaca;border-color:#fca5a5;color:#991b1b"></span>대휴(날짜입력)</div>`);
+    items.push(`<div class="legend-item"><span class="dot" style="background:#fecaca;border-color:#fca5a5;color:#991b1b"></span>대휴(날짜입력)</div>`);
     wrap.innerHTML = items.join('');
   }
 
@@ -2573,20 +2693,37 @@
 
   function openTagSettingsModal(){
     if(!requireAdmin()) return;
-    const enabled = new Set(getEnabledTags());
-    const colors = getTagColorMap();
+    editingTagSettings = getTagSettings().map(item => ({ ...item }));
+    renderTagSettingsModal();
+  }
+
+  function renderTagSettingsModal(){
     const currentTeamLabel = state.currentTeamName || state.teamMeta?.name || '현재 팀';
-    const rows = TAGS.map(tag => `
-      <label class="tag-setting-row ${enabled.has(tag) ? '' : 'disabled'}" data-tag-row="${tag}">
+    const rows = (editingTagSettings || []).map((tag, index) => `
+      <div class="tag-setting-row ${tag.enabled ? '' : 'disabled'}" data-tag-row="${tag.id}">
         <div class="tag-setting-main">
-          <input type="checkbox" data-tag-enable="${tag}" ${enabled.has(tag) ? 'checked' : ''} onchange="syncTagSettingsModal()" />
-          <span class="${normalizeTagClass(tag)}" style="padding:4px 8px;border-radius:999px;border:1px solid transparent;${getTagStyle(tag)}">${tag}</span>
+          <input type="checkbox" data-tag-enable="${tag.id}" ${tag.enabled ? 'checked' : ''} onchange="toggleEditingTagEnabled('${tag.id}')" />
+          <span class="${normalizeTagClass(tag.id)}" data-tag-preview="${tag.id}" style="padding:4px 8px;border-radius:999px;border:1px solid transparent;${getTagStyle(tag.id, { tagSettings: editingTagSettings })}">
+            <span data-tag-preview-text="${tag.id}">${escHtml(tag.label)}</span>
+          </span>
         </div>
-        <div class="tag-setting-color-wrap">
-          <input type="color" data-tag-color="${tag}" value="${colors[tag]}" ${enabled.has(tag) ? '' : 'disabled'} />
-          <span class="tag-setting-hex" data-tag-hex="${tag}">${colors[tag]}</span>
+        <div class="tag-setting-fields">
+          <input class="tag-setting-name" type="text" value="${escHtml(tag.label)}" placeholder="태그 이름" ${isTagNameLocked(tag.id) ? 'disabled' : ''} oninput="updateEditingTagLabel('${tag.id}', this.value)" />
+          ${isTagNameLocked(tag.id) ? `<span class="tag-setting-lock">집계 고정</span>` : ''}
+          <select class="tag-setting-export" ${isTagExportLocked(tag.id) ? 'disabled' : ''} onchange="updateEditingTagExport('${tag.id}', this.value)">
+            ${TAG_EXPORT_OPTIONS.map(option => `<option value="${option.value}" ${tag.exportAs === option.value ? 'selected' : ''}>${option.label}</option>`).join('')}
+          </select>
+          ${isTagExportLocked(tag.id) ? `<span class="tag-setting-lock">엑셀 고정</span>` : ''}
+          <div class="tag-setting-color-wrap">
+            <input type="color" data-tag-color="${tag.id}" value="${tag.color}" ${tag.enabled ? '' : 'disabled'} oninput="updateEditingTagColor('${tag.id}', this.value)" />
+            <span class="tag-setting-hex" data-tag-hex="${tag.id}">${tag.color}</span>
+          </div>
+          <div class="tag-setting-order">
+            <button class="btn small" type="button" ${index === 0 ? 'disabled' : ''} onclick="moveEditingTagSetting('${tag.id}', -1)">위</button>
+            <button class="btn small" type="button" ${index === editingTagSettings.length - 1 ? 'disabled' : ''} onclick="moveEditingTagSetting('${tag.id}', 1)">아래</button>
+          </div>
         </div>
-      </label>
+      </div>
     `).join('');
 
     openModal(`
@@ -2594,7 +2731,8 @@
         <div class="modal-title">${escHtml(currentTeamLabel)} · 태그 설정</div>
         <button class="btn" onclick="closeModal()">닫기</button>
       </div>
-      <div class="muted" style="margin-bottom:12px;font-size:13px;">체크한 태그만 배정 창에서 보이고, 선택한 색이 태그와 칩 강조색에 같이 반영돼.</div>
+      <div class="muted" style="margin-bottom:12px;font-size:13px;">태그 이름, 순서, 사용 여부, 색상, 엑셀 분류를 팀별로 저장해둘 수 있어.</div>
+      <div class="muted" style="margin-bottom:12px;font-size:12px;">집계 핵심 태그는 이름과 엑셀 분류가 고정되고, 나머지 태그는 엑셀에서 연차/공가/휴무 등으로 어떻게 쓸지 정할 수 있어.</div>
       <div class="tag-settings-list">${rows}</div>
       <div id="tagSettingsMsg" class="muted" style="min-height:20px;margin-top:12px;font-size:12px;"></div>
       <div class="modal-actions">
@@ -2605,33 +2743,84 @@
     syncTagSettingsModal();
   }
 
+  function getEditingTagSetting(tagId){
+    return (editingTagSettings || []).find(item => item.id === tagId) || null;
+  }
+
   function syncTagSettingsModal(){
-    TAGS.forEach(tag => {
-      const checked = !!document.querySelector(`[data-tag-enable="${tag}"]`)?.checked;
-      const colorInput = document.querySelector(`[data-tag-color="${tag}"]`);
-      const row = document.querySelector(`[data-tag-row="${tag}"]`);
-      const hex = document.querySelector(`[data-tag-hex="${tag}"]`);
-      if(colorInput){
-        colorInput.disabled = !checked;
-        if(hex) hex.textContent = colorInput.value;
-        colorInput.oninput = () => {
-          if(hex) hex.textContent = colorInput.value;
-        };
-      }
-      if(row) row.classList.toggle('disabled', !checked);
+    (editingTagSettings || []).forEach(tag => {
+      const row = document.querySelector(`[data-tag-row="${tag.id}"]`);
+      const colorInput = document.querySelector(`[data-tag-color="${tag.id}"]`);
+      const exportSelect = row?.querySelector('.tag-setting-export');
+      const hex = document.querySelector(`[data-tag-hex="${tag.id}"]`);
+      const preview = document.querySelector(`[data-tag-preview="${tag.id}"]`);
+      const previewText = document.querySelector(`[data-tag-preview-text="${tag.id}"]`);
+      if(row) row.classList.toggle('disabled', !tag.enabled);
+      if(colorInput) colorInput.disabled = !tag.enabled;
+      if(exportSelect) exportSelect.disabled = !tag.enabled || isTagExportLocked(tag.id);
+      if(hex) hex.textContent = tag.color;
+      if(preview) preview.setAttribute('style', `padding:4px 8px;border-radius:999px;border:1px solid transparent;${getTagStyle(tag.id, { tagSettings: editingTagSettings })}`);
+      if(previewText) previewText.textContent = tag.label || TAG_LABEL_DEFAULTS[tag.id];
     });
   }
 
+  function toggleEditingTagEnabled(tagId){
+    const target = getEditingTagSetting(tagId);
+    if(!target) return;
+    target.enabled = !!document.querySelector(`[data-tag-enable="${tagId}"]`)?.checked;
+    syncTagSettingsModal();
+  }
+
+  function updateEditingTagLabel(tagId, value){
+    const target = getEditingTagSetting(tagId);
+    if(!target) return;
+    if(isTagNameLocked(tagId)) return;
+    target.label = String(value || '').trimStart();
+    syncTagSettingsModal();
+  }
+
+  function updateEditingTagColor(tagId, value){
+    const target = getEditingTagSetting(tagId);
+    if(!target) return;
+    target.color = normalizeHexColor(value, target.color || TAG_COLOR_DEFAULTS[tagId]);
+    syncTagSettingsModal();
+  }
+
+  function updateEditingTagExport(tagId, value){
+    const target = getEditingTagSetting(tagId);
+    if(!target) return;
+    if(isTagExportLocked(tagId)) return;
+    target.exportAs = TAG_EXPORT_OPTIONS.some(option => option.value === value) ? value : '';
+  }
+
+  function moveEditingTagSetting(tagId, delta){
+    if(!Array.isArray(editingTagSettings)) return;
+    const index = editingTagSettings.findIndex(item => item.id === tagId);
+    const targetIndex = index + delta;
+    if(index < 0 || targetIndex < 0 || targetIndex >= editingTagSettings.length) return;
+    const [item] = editingTagSettings.splice(index, 1);
+    editingTagSettings.splice(targetIndex, 0, item);
+    renderTagSettingsModal();
+  }
+
   async function saveTeamTagSettings(){
-    const enabledTags = TAGS.filter(tag => document.querySelector(`[data-tag-enable="${tag}"]`)?.checked);
+    const tagSettings = (editingTagSettings || []).map(item => ({
+      id: item.id,
+      label: String(item.label || '').trim() || TAG_LABEL_DEFAULTS[item.id],
+      color: normalizeHexColor(item.color, TAG_COLOR_DEFAULTS[item.id]),
+      enabled: item.enabled !== false,
+      exportAs: TAG_EXPORT_OPTIONS.some(option => option.value === item.exportAs)
+        ? item.exportAs
+        : TAG_EXPORT_DEFAULTS[item.id]
+    }));
+    const enabledTags = tagSettings.filter(item => item.enabled).map(item => item.id);
     const msg = document.getElementById('tagSettingsMsg');
     if(!enabledTags.length){
       if(msg) msg.textContent = '최소 1개 태그는 선택해줘.';
       return;
     }
-
-    const tagColors = TAGS.reduce((acc, tag) => {
-      acc[tag] = document.querySelector(`[data-tag-color="${tag}"]`)?.value || TAG_COLOR_DEFAULTS[tag];
+    const tagColors = tagSettings.reduce((acc, item) => {
+      acc[item.id] = item.color;
       return acc;
     }, {});
 
@@ -2644,13 +2833,14 @@
         body: JSON.stringify({
           adminToken: getAdminToken(),
           teamId: getActiveTeamId(),
+          tagSettings,
           enabledTags,
           tagColors
         })
       });
       const data = await res.json().catch(() => ({}));
       if(!res.ok) throw new Error(data.error || '태그 설정 저장 실패');
-      state.teamMeta = data.team || { ...(state.teamMeta || {}), enabledTags, tagColors };
+      state.teamMeta = data.team || { ...(state.teamMeta || {}), tagSettings, enabledTags, tagColors };
       if(Array.isArray(state.availableTeams)){
         state.availableTeams = state.availableTeams.map(team => (
           team.id === state.teamMeta?.id ? { ...team, ...state.teamMeta } : team
@@ -3229,8 +3419,8 @@
 
     const checks = assignableTags.map(tag=>`
       <label class="tag-label">
-        <input type="checkbox" value="${tag}" ${entry.tags.includes(tag) ? 'checked' : ''} />
-        <span class="${normalizeTagClass(tag)}" style="padding:4px 8px;border-radius:999px;border:1px solid transparent;${getTagStyle(tag)}">${tag}</span>
+        <input type="checkbox" value="${tag.id}" ${entry.tags.includes(tag.id) ? 'checked' : ''} />
+        <span class="${normalizeTagClass(tag.id)}" style="padding:4px 8px;border-radius:999px;border:1px solid transparent;${getTagStyle(tag.id)}">${escHtml(tag.label)}</span>
       </label>
     `).join('');
 
@@ -3598,7 +3788,14 @@
     }
   }
 
-  function escHtml(str){ return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function escHtml(str){
+    return String(str)
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;')
+      .replace(/'/g,'&#39;');
+  }
 
   async function refreshFromServer(){
     if(!getAdminToken()){
