@@ -103,17 +103,7 @@
 
         <div class="wishoff-helper no-print viewer-only hidden" id="wishOffHelper"></div>
 
-        <div class="legend no-print">
-          <div class="legend-item"><span class="dot" style="background:#fde68a"></span>연차</div>
-          <div class="legend-item"><span class="dot" style="background:#bbf7d0"></span>교육&학회</div>
-          <div class="legend-item"><span class="dot" style="background:#fecaca"></span>대휴(날짜입력)</div>
-          <div class="legend-item"><span class="dot" style="background:#ddd6fe"></span>희망휴무</div>
-          <div class="legend-item"><span class="dot" style="background:#d1d5db"></span>검체관리</div>
-          <div class="legend-item"><span class="dot" style="background:#a7f3d0"></span>여름휴가</div>
-          <div class="legend-item"><span class="dot" style="background:#fdba74"></span>반차</div>
-          <div class="legend-item"><span class="dot" style="background:#bbf7d0"></span>주간지원</div>
-          <div class="legend-item"><span class="dot" style="background:#bfdbfe"></span>야간지원</div>
-        </div>
+        <div class="legend no-print" id="tagLegend"></div>
 
         <div class="calendar-wrap" id="calendarWrap"></div>
       </div>
@@ -200,6 +190,14 @@
             <div class="settings-actions">
               <button class="btn" onclick="openSlotConfigModal()">슬롯 설정</button>
               <button class="btn" onclick="resetCurrentMonth()">현재 월 초기화</button>
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <div class="settings-card-title">팀 태그 설정</div>
+            <div class="settings-card-desc">현재 팀에서 사용할 태그와 태그별 색상을 직접 골라둘 수 있어.</div>
+            <div class="settings-actions">
+              <button class="btn" onclick="openTagSettingsModal()">태그 설정</button>
             </div>
           </section>
 

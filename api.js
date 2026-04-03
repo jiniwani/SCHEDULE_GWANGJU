@@ -1,8 +1,3 @@
-const STATE_KEY = 'schedulerState';
-const CHANGELOG_KEY = 'schedulerChangelog';
-const PW_HASH_KEY = 'schedulerAdminPwHash';
-const RECOVERY_HASH_KEY = 'schedulerAdminRecoveryHash';
-const SESSION_VERSION_KEY = 'schedulerSessionVersion';
 const SESSION_PREFIX = 'schedulerSession:';
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const KV_READ_OPTIONS = { cacheTtl: 30 };
@@ -19,6 +14,32 @@ const DEFAULT_SUPER_ADMIN_HASH = '03ac674216f3e15c761ee1a5e255f067953623c8b388b4
 const LEGACY_BROKEN_RECOVERY_HASH = '41963f0d8ff4ff516d17df3f4d40e2683955f1c632dda298c4a39edb4f8090dd';
 const DEFAULT_RECOVERY_HASH = '6053f37205842f63fe11ceb14b810bec05f1547a0f7a4f43d9abe1ee8691dcdd';
 const DEFAULT_TEAM_VIEWER_HASH = '0ffe1abd1a08215353c233d6e009613e95eec4253832a761af28ff37ac5a150c';
+const TEAM_TAGS = [
+  '연차',
+  '반차',
+  '경조',
+  '코로나',
+  '교육&학회',
+  '당직',
+  '희망휴무',
+  '검체관리',
+  '여름휴가',
+  '주간지원',
+  '야간지원',
+];
+const DEFAULT_TAG_COLORS = {
+  '연차': '#fde68a',
+  '반차': '#fdba74',
+  '경조': '#fbcfe8',
+  '코로나': '#a5f3fc',
+  '교육&학회': '#bbf7d0',
+  '당직': '#fecdd3',
+  '희망휴무': '#ddd6fe',
+  '검체관리': '#d1d5db',
+  '여름휴가': '#a7f3d0',
+  '주간지원': '#bbf7d0',
+  '야간지원': '#bfdbfe',
+};
 let storageReadyPromise = null;
 
 function cors(res) {
@@ -40,18 +61,6 @@ async function sha256Hex(value) {
   return [...new Uint8Array(buffer)].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-function shouldBypassKvCache(request) {
-  const url = new URL(request.url);
-  return url.searchParams.get('fresh') === '1';
-}
-
-async function getKvValue(env, key, request) {
-  if (request && shouldBypassKvCache(request)) {
-    return env.SCHEDULER_KV.get(key);
-  }
-  return env.SCHEDULER_KV.get(key, KV_READ_OPTIONS);
-}
-
 function getD1Database(env) {
   return env.DB || env.SCHEDULER_DB || env.DATABASE || env.schedule || null;
 }
@@ -69,20 +78,27 @@ function parseJsonText(value, fallback) {
   }
 }
 
-async function getStoredSuperAdminHashFromKv(env) {
-  const hash = await env.SCHEDULER_KV.get(PW_HASH_KEY, KV_READ_OPTIONS);
-  return hash || DEFAULT_SUPER_ADMIN_HASH;
+function normalizeHexColor(value, fallback) {
+  const raw = String(value || '').trim();
+  if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(raw)) return fallback;
+  if (raw.length === 4) {
+    return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`.toLowerCase();
+  }
+  return raw.toLowerCase();
 }
 
-async function getStoredRecoveryHashFromKv(env) {
-  const hash = await env.SCHEDULER_KV.get(RECOVERY_HASH_KEY, KV_READ_OPTIONS);
-  return normalizeRecoveryHash(hash);
+function normalizeEnabledTags(tags, fallback = TEAM_TAGS) {
+  if (!Array.isArray(tags)) return [...fallback];
+  return TEAM_TAGS.filter(tag => tags.includes(tag));
 }
 
-async function getSessionVersionFromKv(env) {
-  const raw = await env.SCHEDULER_KV.get(SESSION_VERSION_KEY, KV_READ_OPTIONS);
-  const parsed = Number(raw || '1');
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+function normalizeTagColors(colors, fallback = DEFAULT_TAG_COLORS) {
+  const safeColors = colors && typeof colors === 'object' ? colors : {};
+  const safeFallback = fallback && typeof fallback === 'object' ? fallback : DEFAULT_TAG_COLORS;
+  return TEAM_TAGS.reduce((acc, tag) => {
+    acc[tag] = normalizeHexColor(safeColors[tag], normalizeHexColor(safeFallback[tag], DEFAULT_TAG_COLORS[tag]));
+    return acc;
+  }, {});
 }
 
 async function getD1MetaValue(env, key) {
@@ -229,6 +245,9 @@ function createDefaultTeamState(overrides = {}) {
 
 function normalizeTeam(team, index = 0) {
   const safe = team && typeof team === 'object' ? { ...team } : {};
+  const fallbackEnabledTags = safe.enabledTags || TEAM_TAGS;
+  const enabledTags = normalizeEnabledTags(safe.enabledTags, fallbackEnabledTags);
+  const tagColors = normalizeTagColors(safe.tagColors, DEFAULT_TAG_COLORS);
   return {
     id: safe.id || `team-${index + 1}`,
     name: safe.name || `팀 ${index + 1}`,
@@ -239,6 +258,8 @@ function normalizeTeam(team, index = 0) {
     standardHours: safe.standardHours || '8시간',
     adminPasswordHash: safe.adminPasswordHash || DEFAULT_SUPER_ADMIN_HASH,
     viewerPasswordHash: safe.viewerPasswordHash || DEFAULT_TEAM_VIEWER_HASH,
+    enabledTags: enabledTags.length ? enabledTags : [...TEAM_TAGS],
+    tagColors,
     data: normalizeTeamState(safe.data),
     changelog: Array.isArray(safe.changelog) ? safe.changelog.slice(0, CHANGELOG_LIMIT) : [],
   };
@@ -274,38 +295,18 @@ function normalizeRootState(raw, { fallbackAdminHash, legacyChangelog = [] } = {
 }
 
 async function getStoredRootState(env, request) {
-  if (hasD1Storage(env)) {
-    await ensureStorageReady(env, request);
-    return getStoredRootStateFromD1(env);
-  }
-  return getStoredRootStateFromKv(env, request);
-}
-
-async function getStoredRootStateFromKv(env, request) {
-  const raw = await getKvValue(env, STATE_KEY, request);
-  const fallbackAdminHash = await getStoredSuperAdminHashFromKv(env);
-  const rawLegacyChangelog = await env.SCHEDULER_KV.get(CHANGELOG_KEY, KV_READ_OPTIONS);
-  const legacyChangelog = parseJsonText(rawLegacyChangelog, []);
-
-  if (!raw) {
-    return normalizeRootState(null, { fallbackAdminHash, legacyChangelog });
-  }
-
-  const parsed = parseJsonText(raw, null);
-  return normalizeRootState(parsed, { fallbackAdminHash, legacyChangelog });
+  await ensureStorageReady(env, request);
+  return getStoredRootStateFromD1(env);
 }
 
 async function getLatestStoredRootState(env) {
-  return getStoredRootState(env);
+  await ensureStorageReady(env);
+  return getStoredRootStateFromD1(env);
 }
 
 async function saveRootState(env, root) {
-  if (hasD1Storage(env)) {
-    await ensureStorageReady(env);
-    await saveRootStateToD1(env, root);
-    return;
-  }
-  await env.SCHEDULER_KV.put(STATE_KEY, JSON.stringify(root));
+  await ensureStorageReady(env);
+  await saveRootStateToD1(env, root);
 }
 
 async function saveRootStateToD1(env, root) {
@@ -421,20 +422,20 @@ async function ensureStorageReady(env, request) {
       }
 
       if (!(await getD1MetaValue(env, D1_META_SUPER_ADMIN_HASH))) {
-        await setD1MetaValue(env, D1_META_SUPER_ADMIN_HASH, await getStoredSuperAdminHashFromKv(env));
+        await setD1MetaValue(env, D1_META_SUPER_ADMIN_HASH, DEFAULT_SUPER_ADMIN_HASH);
       }
       if (!(await getD1MetaValue(env, D1_META_RECOVERY_HASH))) {
-        await setD1MetaValue(env, D1_META_RECOVERY_HASH, await getStoredRecoveryHashFromKv(env));
+        await setD1MetaValue(env, D1_META_RECOVERY_HASH, DEFAULT_RECOVERY_HASH);
       }
       if (!(await getD1MetaValue(env, D1_META_SESSION_VERSION))) {
-        await setD1MetaValue(env, D1_META_SESSION_VERSION, await getSessionVersionFromKv(env));
+        await setD1MetaValue(env, D1_META_SESSION_VERSION, 1);
       }
 
       const countRow = await db.prepare(`SELECT COUNT(*) AS count FROM ${D1_TEAM_TABLE}`).first();
       if (Number(countRow?.count || 0) > 0) return;
 
-      const kvRoot = await getStoredRootStateFromKv(env, request);
-      await saveRootStateToD1(env, kvRoot);
+      const root = normalizeRootState(null, { fallbackAdminHash: DEFAULT_SUPER_ADMIN_HASH, legacyChangelog: [] });
+      await saveRootStateToD1(env, root);
     })().catch(error => {
       storageReadyPromise = null;
       throw error;
@@ -444,57 +445,36 @@ async function ensureStorageReady(env, request) {
 }
 
 async function getStoredSuperAdminHash(env) {
-  if (hasD1Storage(env)) {
-    await ensureStorageReady(env);
-    return (await getD1MetaValue(env, D1_META_SUPER_ADMIN_HASH)) || DEFAULT_SUPER_ADMIN_HASH;
-  }
-  return getStoredSuperAdminHashFromKv(env);
+  await ensureStorageReady(env);
+  return (await getD1MetaValue(env, D1_META_SUPER_ADMIN_HASH)) || DEFAULT_SUPER_ADMIN_HASH;
 }
 
 async function setStoredSuperAdminHash(env, value) {
-  if (hasD1Storage(env)) {
-    await ensureStorageReady(env);
-    await setD1MetaValue(env, D1_META_SUPER_ADMIN_HASH, value);
-    return;
-  }
-  await env.SCHEDULER_KV.put(PW_HASH_KEY, value);
+  await ensureStorageReady(env);
+  await setD1MetaValue(env, D1_META_SUPER_ADMIN_HASH, value);
 }
 
 async function getStoredRecoveryHash(env) {
-  if (hasD1Storage(env)) {
-    await ensureStorageReady(env);
-    return normalizeRecoveryHash(await getD1MetaValue(env, D1_META_RECOVERY_HASH));
-  }
-  return getStoredRecoveryHashFromKv(env);
+  await ensureStorageReady(env);
+  return normalizeRecoveryHash(await getD1MetaValue(env, D1_META_RECOVERY_HASH));
 }
 
 async function setStoredRecoveryHash(env, value) {
-  if (hasD1Storage(env)) {
-    await ensureStorageReady(env);
-    await setD1MetaValue(env, D1_META_RECOVERY_HASH, value);
-    return;
-  }
-  await env.SCHEDULER_KV.put(RECOVERY_HASH_KEY, value);
+  await ensureStorageReady(env);
+  await setD1MetaValue(env, D1_META_RECOVERY_HASH, value);
 }
 
 async function getSessionVersion(env) {
-  if (hasD1Storage(env)) {
-    await ensureStorageReady(env);
-    const raw = await getD1MetaValue(env, D1_META_SESSION_VERSION);
-    const parsed = Number(raw || '1');
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-  }
-  return getSessionVersionFromKv(env);
+  await ensureStorageReady(env);
+  const raw = await getD1MetaValue(env, D1_META_SESSION_VERSION);
+  const parsed = Number(raw || '1');
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
 async function invalidateAllSessions(env) {
   const nextVersion = (await getSessionVersion(env)) + 1;
-  if (hasD1Storage(env)) {
-    await ensureStorageReady(env);
-    await setD1MetaValue(env, D1_META_SESSION_VERSION, nextVersion);
-    return nextVersion;
-  }
-  await env.SCHEDULER_KV.put(SESSION_VERSION_KEY, String(nextVersion));
+  await ensureStorageReady(env);
+  await setD1MetaValue(env, D1_META_SESSION_VERSION, nextVersion);
   return nextVersion;
 }
 
@@ -561,6 +541,8 @@ function getPublicTeam(team) {
     department: team.department,
     workType: team.workType,
     standardHours: team.standardHours,
+    enabledTags: normalizeEnabledTags(team.enabledTags, TEAM_TAGS),
+    tagColors: normalizeTagColors(team.tagColors, DEFAULT_TAG_COLORS),
   };
 }
 
@@ -652,7 +634,46 @@ function buildTeamMetaFromInput(input = {}, fallback = {}) {
     department: String(input.department || fallback.department || input.name || '새 팀').trim() || '새 팀',
     workType: String(input.workType || fallback.workType || '주 5일제').trim() || '주 5일제',
     standardHours: String(input.standardHours || fallback.standardHours || '8시간').trim() || '8시간',
+    enabledTags: normalizeEnabledTags(input.enabledTags, fallback.enabledTags || TEAM_TAGS),
+    tagColors: normalizeTagColors(input.tagColors, fallback.tagColors || DEFAULT_TAG_COLORS),
   };
+}
+
+async function handleUpdateTeamSettings(request, env) {
+  const body = await readJson(request);
+  if (!body) return cors(json({ error: '잘못된 요청이야.' }, 400));
+
+  const sessionResult = await getSession(env, request, body.adminToken);
+  if (!sessionResult) {
+    return cors(json({ error: '로그인 세션이 만료됐어. 다시 로그인해줘.' }, 403));
+  }
+  if (!isEditRole(sessionResult.session.role)) {
+    return cors(json({ error: '수정 권한이 없어.' }, 403));
+  }
+
+  const root = await getLatestStoredRootState(env);
+  const activeTeam = resolveActiveTeam(root, sessionResult.session, request, body);
+  if (!activeTeam) return cors(json({ error: '팀을 찾지 못했어.' }, 404));
+
+  const enabledTags = normalizeEnabledTags(body.enabledTags, activeTeam.enabledTags || TEAM_TAGS);
+  if (!enabledTags.length) {
+    return cors(json({ error: '최소 1개 태그는 선택해줘.' }, 400));
+  }
+
+  const teamIndex = findTeamIndex(root, activeTeam.id);
+  if (teamIndex === -1) return cors(json({ error: '팀을 찾지 못했어.' }, 404));
+
+  root.teams[teamIndex] = {
+    ...root.teams[teamIndex],
+    enabledTags,
+    tagColors: normalizeTagColors(body.tagColors, root.teams[teamIndex].tagColors || DEFAULT_TAG_COLORS),
+  };
+
+  await saveRootState(env, root);
+  return cors(json({
+    ok: true,
+    team: getPublicTeam(root.teams[teamIndex]),
+  }));
 }
 
 async function handleAuthOptions(request, env) {
@@ -1320,6 +1341,10 @@ export async function onRequest(context) {
   if (path.startsWith('/api/teams')) {
     if (method === 'GET') return handleGetTeams(request, env);
     if (method === 'POST') return handlePostTeams(request, env);
+    return cors(json({ error: 'Method Not Allowed' }, 405));
+  }
+  if (path.startsWith('/api/team-settings')) {
+    if (method === 'POST') return handleUpdateTeamSettings(request, env);
     return cors(json({ error: 'Method Not Allowed' }, 405));
   }
   if (path.startsWith('/api/change-password')) {

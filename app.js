@@ -80,6 +80,20 @@
     violet: { work: '#ede9fe', off: '#f5f3ff' }
   };
 
+  const TAG_COLOR_DEFAULTS = {
+    '연차': '#fde68a',
+    '반차': '#fdba74',
+    '경조': '#fbcfe8',
+    '코로나': '#a5f3fc',
+    '교육&학회': '#bbf7d0',
+    '당직': '#fecdd3',
+    '희망휴무': '#ddd6fe',
+    '검체관리': '#d1d5db',
+    '여름휴가': '#a7f3d0',
+    '주간지원': '#bbf7d0',
+    '야간지원': '#bfdbfe'
+  };
+
   function clamp(v, min, max){
     return Math.max(min, Math.min(max, v));
   }
@@ -104,6 +118,68 @@
   function darken(hex, ratio){
     const {r,g,b}=hexToRgb(hex);
     return rgbToHex(r*(1-ratio), g*(1-ratio), b*(1-ratio));
+  }
+
+  function normalizeHexColor(value, fallback){
+    const raw = String(value || '').trim();
+    if(!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(raw)) return fallback;
+    if(raw.length === 4){
+      return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`.toLowerCase();
+    }
+    return raw.toLowerCase();
+  }
+
+  function getContrastTextColor(hex){
+    const { r, g, b } = hexToRgb(hex);
+    const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+    if(brightness > 190) return '#334155';
+    if(brightness > 140) return '#1f2937';
+    return '#ffffff';
+  }
+
+  function normalizeTagColorMap(colors){
+    const safe = colors && typeof colors === 'object' ? colors : {};
+    return TAGS.reduce((acc, tag) => {
+      acc[tag] = normalizeHexColor(safe[tag], TAG_COLOR_DEFAULTS[tag]);
+      return acc;
+    }, {});
+  }
+
+  function getEnabledTags(meta = state.teamMeta){
+    if(Array.isArray(meta?.enabledTags)){
+      return TAGS.filter(tag => meta.enabledTags.includes(tag));
+    }
+    return [...TAGS];
+  }
+
+  function getTagColorMap(meta = state.teamMeta){
+    return normalizeTagColorMap(meta?.tagColors);
+  }
+
+  function getTagColorConfig(tag, meta = state.teamMeta){
+    const bg = getTagColorMap(meta)[tag] || TAG_COLOR_DEFAULTS[tag] || '#e5e7eb';
+    return {
+      bg,
+      border: darken(bg, 0.14),
+      text: getContrastTextColor(bg)
+    };
+  }
+
+  function getTagStyle(tag, meta = state.teamMeta){
+    const { bg, border, text } = getTagColorConfig(tag, meta);
+    return `background:${bg};color:${text};border-color:${border};`;
+  }
+
+  function getPrimaryTag(tags = []){
+    return Array.isArray(tags) ? tags.find(tag => TAGS.includes(tag)) || '' : '';
+  }
+
+  function getAvailableAssignmentTags(existingTags = []){
+    const enabled = new Set(getEnabledTags());
+    (Array.isArray(existingTags) ? existingTags : []).forEach(tag => {
+      if(TAGS.includes(tag)) enabled.add(tag);
+    });
+    return TAGS.filter(tag => enabled.has(tag));
   }
 
   function ensureHighlightColors(){
@@ -883,9 +959,10 @@
     const text = item.entry.tags.length
       ? `${item.employee.name} (${item.entry.tags.join(', ')})`
       : item.employee.name;
-
     const base = shift === '야간' ? 'person-chip night-chip' : (shift === '휴무' ? 'off-chip' : 'person-chip');
     const focusClass = Number(state.selectedEmployeeId) === Number(item.employee.id) ? 'employee-focus' : '';
+    const primaryTag = getPrimaryTag(item.entry.tags);
+    const tagStyle = primaryTag && !focusClass ? getTagStyle(primaryTag) : '';
     const clickable = isAdmin()
       ? `draggable="true"
          ondragstart="dragStart(event, ${item.employee.id}, '${dateKey}', '${shift}')"
@@ -896,6 +973,7 @@
     return `
       <button
         class="${base} ${classes} ${focusClass}"
+        style="${tagStyle}"
         ${clickable}
       >
         ${text}
@@ -2191,6 +2269,19 @@
     select.value = getActiveTeamId() || state.availableTeams[0]?.id || '';
   }
 
+  function renderTagLegend(){
+    const wrap = document.getElementById('tagLegend');
+    if(!wrap) return;
+    const enabledTags = getEnabledTags();
+    const items = enabledTags.map(tag => `
+      <div class="legend-item">
+        <span class="dot" style="${getTagStyle(tag)}"></span>${tag}
+      </div>
+    `);
+    items.splice(2, 0, `<div class="legend-item"><span class="dot" style="background:#fecaca;border-color:#fca5a5;color:#991b1b"></span>대휴(날짜입력)</div>`);
+    wrap.innerHTML = items.join('');
+  }
+
   function renderAuthGate(forceOpen = false){
     const gate = document.getElementById('authGate');
     const body = document.getElementById('authGateBody');
@@ -2237,6 +2328,7 @@
     applyHighlightColors();
     applyRoleView();
     renderTeamSwitcher();
+    renderTagLegend();
     renderAuthGate();
     renderLastSavedInfo();
     const earlyBtn = document.getElementById('earlyShiftToggleBtn');
@@ -2476,6 +2568,98 @@
       closeModal();
     }catch(e){
       alert(e.message || '팀 삭제에 실패했어.');
+    }
+  }
+
+  function openTagSettingsModal(){
+    if(!requireAdmin()) return;
+    const enabled = new Set(getEnabledTags());
+    const colors = getTagColorMap();
+    const currentTeamLabel = state.currentTeamName || state.teamMeta?.name || '현재 팀';
+    const rows = TAGS.map(tag => `
+      <label class="tag-setting-row ${enabled.has(tag) ? '' : 'disabled'}" data-tag-row="${tag}">
+        <div class="tag-setting-main">
+          <input type="checkbox" data-tag-enable="${tag}" ${enabled.has(tag) ? 'checked' : ''} onchange="syncTagSettingsModal()" />
+          <span class="${normalizeTagClass(tag)}" style="padding:4px 8px;border-radius:999px;border:1px solid transparent;${getTagStyle(tag)}">${tag}</span>
+        </div>
+        <div class="tag-setting-color-wrap">
+          <input type="color" data-tag-color="${tag}" value="${colors[tag]}" ${enabled.has(tag) ? '' : 'disabled'} />
+          <span class="tag-setting-hex" data-tag-hex="${tag}">${colors[tag]}</span>
+        </div>
+      </label>
+    `).join('');
+
+    openModal(`
+      <div class="modal-head">
+        <div class="modal-title">${escHtml(currentTeamLabel)} · 태그 설정</div>
+        <button class="btn" onclick="closeModal()">닫기</button>
+      </div>
+      <div class="muted" style="margin-bottom:12px;font-size:13px;">체크한 태그만 배정 창에서 보이고, 선택한 색이 태그와 칩 강조색에 같이 반영돼.</div>
+      <div class="tag-settings-list">${rows}</div>
+      <div id="tagSettingsMsg" class="muted" style="min-height:20px;margin-top:12px;font-size:12px;"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">취소</button>
+        <button class="btn primary" onclick="saveTeamTagSettings()">저장</button>
+      </div>
+    `);
+    syncTagSettingsModal();
+  }
+
+  function syncTagSettingsModal(){
+    TAGS.forEach(tag => {
+      const checked = !!document.querySelector(`[data-tag-enable="${tag}"]`)?.checked;
+      const colorInput = document.querySelector(`[data-tag-color="${tag}"]`);
+      const row = document.querySelector(`[data-tag-row="${tag}"]`);
+      const hex = document.querySelector(`[data-tag-hex="${tag}"]`);
+      if(colorInput){
+        colorInput.disabled = !checked;
+        if(hex) hex.textContent = colorInput.value;
+        colorInput.oninput = () => {
+          if(hex) hex.textContent = colorInput.value;
+        };
+      }
+      if(row) row.classList.toggle('disabled', !checked);
+    });
+  }
+
+  async function saveTeamTagSettings(){
+    const enabledTags = TAGS.filter(tag => document.querySelector(`[data-tag-enable="${tag}"]`)?.checked);
+    const msg = document.getElementById('tagSettingsMsg');
+    if(!enabledTags.length){
+      if(msg) msg.textContent = '최소 1개 태그는 선택해줘.';
+      return;
+    }
+
+    const tagColors = TAGS.reduce((acc, tag) => {
+      acc[tag] = document.querySelector(`[data-tag-color="${tag}"]`)?.value || TAG_COLOR_DEFAULTS[tag];
+      return acc;
+    }, {});
+
+    if(msg) msg.textContent = '저장 중…';
+
+    try{
+      const res = await fetch(buildApiUrl('/api/team-settings'), {
+        method: 'POST',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          adminToken: getAdminToken(),
+          teamId: getActiveTeamId(),
+          enabledTags,
+          tagColors
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(data.error || '태그 설정 저장 실패');
+      state.teamMeta = data.team || { ...(state.teamMeta || {}), enabledTags, tagColors };
+      if(Array.isArray(state.availableTeams)){
+        state.availableTeams = state.availableTeams.map(team => (
+          team.id === state.teamMeta?.id ? { ...team, ...state.teamMeta } : team
+        ));
+      }
+      renderAll();
+      closeModal();
+    }catch(e){
+      if(msg) msg.textContent = e.message || '태그 설정 저장에 실패했어.';
     }
   }
 
@@ -3041,11 +3225,12 @@
     const entry = getEntry(empId, dateKey);
     const customDaehuTag = entry.tags.find(tag => /^대휴\((.*)\)$/.test(tag)) || '';
     const customDaehuDate = customDaehuTag ? customDaehuTag.replace(/^대휴\((.*)\)$/, '$1') : '';
+    const assignableTags = getAvailableAssignmentTags(entry.tags);
 
-    const checks = TAGS.map(tag=>`
+    const checks = assignableTags.map(tag=>`
       <label class="tag-label">
         <input type="checkbox" value="${tag}" ${entry.tags.includes(tag) ? 'checked' : ''} />
-        <span class="${normalizeTagClass(tag)}" style="padding:4px 8px;border-radius:999px;border:1px solid transparent">${tag}</span>
+        <span class="${normalizeTagClass(tag)}" style="padding:4px 8px;border-radius:999px;border:1px solid transparent;${getTagStyle(tag)}">${tag}</span>
       </label>
     `).join('');
 
@@ -3069,7 +3254,7 @@
 
       <div>
         <div style="font-weight:800; margin-bottom:8px">태그</div>
-        <div class="tag-box" id="assignTags">${checks}</div>
+        <div class="tag-box" id="assignTags">${checks || `<div class="muted">현재 팀에서 쓸 태그가 아직 선택되지 않았어.</div>`}</div>
       </div>
 
       <div class="form-row" style="margin-top:12px">
