@@ -11,5 +11,12 @@
       "binding": "SCHEDULER_KV",
       "id": "54c37502ad234cd4ba3a93d1244fd5f2"
     }
+  ],
+  "d1_databases": [
+    {
+      "binding": "schedule",
+      "database_name": "scheduler-db",
+      "database_id": "6cb2d0b5-6d09-4bcb-89f8-a87c907fe8a1"
+    }
   ]
 }

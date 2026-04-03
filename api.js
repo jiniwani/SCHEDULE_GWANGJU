@@ -407,30 +407,18 @@ async function ensureStorageReady(env, request) {
   if (!storageReadyPromise) {
     storageReadyPromise = (async () => {
       const db = getD1Database(env);
-      await db.exec(`
-        CREATE TABLE IF NOT EXISTS ${D1_META_TABLE} (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL,
-          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS ${D1_TEAM_TABLE} (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          region TEXT NOT NULL,
-          location TEXT NOT NULL,
-          department TEXT NOT NULL,
-          work_type TEXT NOT NULL,
-          standard_hours TEXT NOT NULL,
-          admin_password_hash TEXT NOT NULL,
-          viewer_password_hash TEXT NOT NULL,
-          data_json TEXT NOT NULL,
-          changelog_json TEXT NOT NULL,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_scheduler_teams_created_at
-          ON ${D1_TEAM_TABLE}(created_at, id);
-      `);
+      const metaTable = await db
+        .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`)
+        .bind(D1_META_TABLE)
+        .first();
+      const teamTable = await db
+        .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`)
+        .bind(D1_TEAM_TABLE)
+        .first();
+
+      if (!metaTable?.name || !teamTable?.name) {
+        throw new Error('D1 schema is missing required tables. Initialize scheduler_meta and scheduler_teams first.');
+      }
 
       if (!(await getD1MetaValue(env, D1_META_SUPER_ADMIN_HASH))) {
         await setD1MetaValue(env, D1_META_SUPER_ADMIN_HASH, await getStoredSuperAdminHashFromKv(env));
